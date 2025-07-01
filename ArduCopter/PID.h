@@ -2,6 +2,8 @@
 
 #include "filters.h"
 
+#ifndef LINEARPIDCONTROLLER_CLASS_DEFINED
+#define LINEARPIDCONTROLLER_CLASS_DEFINED
 class LinearPIDController {
   private:
     //double p;
@@ -29,3 +31,4 @@ class LinearPIDController {
     void setGain(double gain);
     void useDFilter(int cutoffFreq, double sampleTime);
 };
+#endif // LINEARPIDCONTROLLER_CLASS_DEFINED

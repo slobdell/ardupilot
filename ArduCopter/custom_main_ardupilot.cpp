@@ -1,5 +1,5 @@
+#include "custom_main.h"   // must come first: defines legacy TVC types before TVC_Core.h is pulled in via Copter.h
 #include "Copter.h"
-#include "custom_main.h"
 #include <AP_Vehicle/AP_Vehicle.h>
 #include <AP_AHRS/AP_AHRS.h>
 #include <AP_HAL/AP_HAL.h>

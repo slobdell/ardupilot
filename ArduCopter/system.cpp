@@ -6,9 +6,7 @@
 #include <AP_HAL/AP_HAL.h>
 #include <AP_CustomConfig/AP_CustomConfig.h>
 
-#if ENABLE_TRICOPTER_VTOL_BACKEND
-#error "ENABLE_TRICOPTER_VTOL_BACKEND can only be used with ArduPlane builds"
-#endif
+// ENABLE_TRICOPTER_VTOL_BACKEND is intentionally used here for blimp/avatar firmware
 
 /*****************************************************************************
 *   The init_ardupilot function processes everything we need for an in - air restart

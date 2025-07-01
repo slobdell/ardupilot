@@ -20,23 +20,19 @@
 // --- TVC Configuration Instance ---
 // This now defines two arbitrary points on the gain schedule spectrum.
 // The system will create a linear function based on these two points.
-const TVC_Config tvc_config = {
-    .pitch_rate_tune_point_low  = {0.25f, 0.0036f, 0.0036f, 0.000011f}, // Tuned at low thrust (e.g., 25%)
-    .pitch_rate_tune_point_high = {0.75f, 0.0018f, 0.0036f, 0.0000055f},// Tuned at high thrust (e.g., 75%)
-    .roll_rate_tune_point_low   = {0.25f, 0.001f, 0.001f, 0.000005899f},
-    .roll_rate_tune_point_high  = {0.75f, 0.0005f, 0.001f, 0.0000029f},
-    .pitch_angle      = {1.5, 0.0, 0.015},
-    .roll_angle       = {1.5, 0.0, 0.015},
-    .i_max_angle      = 100.0,
-    .i_max_pitch_rate = 240.0,
-    .i_max_roll_rate  = 500.0
-};
+// tvc_config is defined in libraries/AP_Motors/TVC_Core.cpp (removed duplicate)
+// Legacy gains are preserved here as a comment for reference:
+// pitch_rate_tune_point_low  = {0.25f, 0.0036f, 0.0036f, 0.000011f}
+// pitch_rate_tune_point_high = {0.75f, 0.0018f, 0.0036f, 0.0000055f}
+// roll_rate_tune_point_low   = {0.25f, 0.001f, 0.001f, 0.000005899f}
+// roll_rate_tune_point_high  = {0.75f, 0.0005f, 0.001f, 0.0000029f}
+// pitch_angle = {1.5, 0.0, 0.015},  roll_angle = {1.5, 0.0, 0.015}
 
 // =============================================================================
 // --- HELPER PROTOTYPES (Internal to this file) ---
 // =============================================================================
 int float_to_sbus_pwm(float float_val, float min_float, float max_float);
-void clip_vectors_for_saturation(float base_throttles[], float* vector_pitch, float* vector_roll, bool& pitch_saturated, bool& roll_saturated);
+static void clip_vectors_for_saturation(float base_throttles[], float* vector_pitch, float* vector_roll, bool& pitch_saturated, bool& roll_saturated);
 
 // Helper to constrain a float value
 static inline float constrain_float(float val, float min, float max) {
@@ -328,7 +324,7 @@ int float_to_sbus_pwm(float float_val, float min_float, float max_float) {
   return (int)(((float_val - min_float) / (max_float - min_float)) * (SBUS_MAX_PWM - SBUS_MIN_PWM) + SBUS_MIN_PWM);
 }
 
-void clip_vectors_for_saturation(float base_throttles[], float* vector_pitch, float* vector_roll, bool& pitch_saturated, bool& roll_saturated) {
+static void clip_vectors_for_saturation(float base_throttles[], float* vector_pitch, float* vector_roll, bool& pitch_saturated, bool& roll_saturated) {
   pitch_saturated = false;
   roll_saturated = false;
   float max_base_throttle = 0.0f;

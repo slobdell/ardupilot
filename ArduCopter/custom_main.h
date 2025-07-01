@@ -1,5 +1,9 @@
 #pragma once
 
+// Sentinel: tells TVC_Core.h to skip definitions that this file already provides,
+// preventing redefinition errors when both headers end up in the same TU.
+#define CUSTOM_MAIN_LEGACY_TYPES_DEFINED
+
 #include <stdint.h> // For uint32_t etc.
 #include <algorithm> // For std::min/max
 #include <cmath> // For M_PI
@@ -190,8 +194,12 @@ static const uint32_t LOG_PERIOD = 2000; // milliseconds
 #define NUM_PODS 6
 
 // --- MASTER FEATURE FLAGS ---
+#ifndef VTOL_MODE
 #define VTOL_MODE false // Set to true for VTOL (tilt-rotor) mode, false for 6DOF multicopter.
+#endif
+#ifndef OPEN_LOOP_SERVO_MODE
 #define OPEN_LOOP_SERVO_MODE false // NEW: Bypasses IMU/PIDs for direct servo control.
+#endif
 
 // --- SBUS Channel Mapping (from PFC) ---
 const int THRUST_CHANNEL  = 6; // Channel 7

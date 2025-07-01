@@ -2,7 +2,7 @@
 
 const CustomConfig blimpConfig = {
     .run_custom_loop = false,
-    .force_6dof_attitude_controller = false,
+    .force_6dof_attitude_controller = true,
     .lateral_motors_config4 = false,
     .caterpillar_h_frame_6dof = false,
     .lifting_motors_reversible = false,
@@ -27,7 +27,7 @@ const CustomConfig blimpConfig = {
 
 const CustomConfig avatarConfig = {
     .run_custom_loop = false,
-    .force_6dof_attitude_controller = false,
+    .force_6dof_attitude_controller = true,
     .lateral_motors_config4 = false,
     .caterpillar_h_frame_6dof = false,
     .lifting_motors_reversible = false,

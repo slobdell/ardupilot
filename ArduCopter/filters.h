@@ -30,6 +30,8 @@
 
 using namespace IIR;
 
+#ifndef CUSTOMFILTER_CLASS_DEFINED
+#define CUSTOMFILTER_CLASS_DEFINED
 class CustomFilter {
 public:
 
@@ -85,3 +87,4 @@ private:
    */
   inline void  initHighPass();
 };
+#endif // CUSTOMFILTER_CLASS_DEFINED

@@ -402,8 +402,6 @@ bool Copter::set_mode(const uint8_t new_mode, const ModeReason reason)
     return copter.set_mode(static_cast<Mode::Number>(new_mode), reason);
 }
 
-#include "custom_main.h"
-
 // update_flight_mode - calls the appropriate attitude controllers based on flight mode
 // called at 100hz or more
 void Copter::update_flight_mode()

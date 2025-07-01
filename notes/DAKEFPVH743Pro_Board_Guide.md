@@ -97,24 +97,31 @@ firmware.ardupilot.org) and use QGC/Mission Planner for parameter configuration.
 
 ## 5. Building the Firmware
 
-Once the hwdef is present in the fork:
+**Note on scripting:** Do **not** use `--disable-scripting`. The 6DoF attitude
+controller (`AC_AttitudeControl_Multi_6DoF`) that our firmware instantiates via
+`force_6dof_attitude_controller = true` is compiled only when scripting is enabled.
+Disabling scripting will produce a linker error.
+
+**Note on `--debug`:** Adds debug symbols for GDB. Release builds are smaller and
+are what you flash for actual flights.
 
 ```bash
-# From the repo root — clean any previous build artifacts
+# Clean any previous build artifacts (required when switching boards or flags)
 ./waf distclean
 
-# Configure for the DAKE Pro with debug symbols
-# --disable-scripting saves ~200 KB, useful for debug builds on 2 MB flash
-./waf configure --board DAKEFPVH743Pro --debug --disable-scripting
+# --- Release build (for flying) ---
+./waf configure --board DAKEFPVH743Pro
+./waf copter
 
-# Build ArduCopter
+# --- Debug build (for GDB sessions) ---
+./waf configure --board DAKEFPVH743Pro --debug
 ./waf copter
 ```
 
-Build outputs:
-- **Firmware:** `build/DAKEFPVH743Pro/bin/arducopter_with_bl.hex` — use for first flash
-- **Firmware (no BL):** `build/DAKEFPVH743Pro/bin/arducopter.apj` — use for OTA updates
-- **Debug symbols:** `build/DAKEFPVH743Pro/bin/arducopter` — ELF file for GDB
+Build outputs (path reflects whichever configure was run last):
+- **`arducopter_with_bl.hex`** — full flash image including bootloader; use for first flash or ST-Link
+- **`arducopter.apj`** — firmware only (no bootloader); use for OTA updates via GCS
+- **`arducopter`** — ELF with debug symbols; use with GDB (debug builds only)
 
 ---
 
