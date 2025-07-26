@@ -181,7 +181,7 @@ public:
 
     // Command euler yaw rate and pitch angle with roll angle specified in body frame
     // (implemented only in AC_AttitudeControl_TS for tailsitter quadplanes)
-    virtual void input_euler_rate_yaw_euler_angle_pitch_bf_roll(bool plane_controls, float euler_roll_angle_cd, 
+    virtual void input_euler_rate_yaw_euler_angle_pitch_bf_roll(bool plane_controls, float euler_roll_angle_cd,
         float euler_pitch_angle_cd, float euler_yaw_rate_cds) {}
 
     ////// begin rate update functions //////
@@ -189,13 +189,13 @@ public:
     // Since _ang_vel_body can be seen by the rate controller thread all these functions only set it
     // at the end once all of the calculations have been performed. This avoids intermediate results being
     // used by the rate controller when running concurrently. _ang_vel_body is accessed so commonly that
-    // locking proves to be moderately expensive, however since this is changing incrementally values combining 
+    // locking proves to be moderately expensive, however since this is changing incrementally values combining
     // previous and current elements are safe and do not have an impact on control.
     // Any additional functions that are added to manipulate _ang_vel_body should follow this pattern.
 
     // Calculates the body frame angular velocities to follow the target attitude
     // This is used by most of the subsequent functions
-    void attitude_controller_run_quat();
+    void attitude_controller_run_quat(bool disable_position_heading=false);
 
     // Command a Quaternion attitude with feedforward and smoothing
     // attitude_desired_quat: is updated on each time_step (_dt) by the integral of the body frame angular velocity
@@ -426,7 +426,7 @@ public:
 
     // get the slew rate value for roll, pitch and yaw, for oscillation detection in lua scripts
     void get_rpy_srate(float &roll_srate, float &pitch_srate, float &yaw_srate);
-    
+
     // Sets the roll and pitch rate shaping time constant
     void set_roll_pitch_rate_tc(float input_tc) { _rate_rp_tc = input_tc; }
 
@@ -445,7 +445,7 @@ public:
 
     // get the value of the angle P scale that was used in the last loop
     const Vector3f &get_last_angle_P_scale(void) const { return _angle_P_scale_used; }
-    
+
     // setup a one loop PD scale multiplier, multiplying by any
     // previously applied scale from this loop. This allows for more
     // than one type of scale factor to be applied for different

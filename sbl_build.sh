@@ -6,9 +6,9 @@
 BOARD=FlywooF745
 BOARD=CubeOrangePlus
 BOARD=mRoControlZeroH7
-BOARD=MatekH743
 BOARD=FlywooF745
 BOARD=SkystarsH7HD
+BOARD=MatekH743
 echo "building for $BOARD"
 #./waf configure --board $BOARD
 #./waf distclean

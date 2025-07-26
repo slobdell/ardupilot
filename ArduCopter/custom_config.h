@@ -39,4 +39,6 @@
 // airfame.
 #define DISABLE_SENSOR_ROTATION false
 
+#define DISABLE_POSITION_HEADING_LOITER true
+
 #endif // CUSTOM_CONFIG_H

@@ -2,6 +2,7 @@
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 #include <AP_Scheduler/AP_Scheduler.h>
+#include "../../ArduCopter/custom_config.h"
 
 extern const AP_HAL::HAL& hal;
 
@@ -154,21 +155,21 @@ const AP_Param::GroupInfo AC_AttitudeControl::var_info[] = {
 
     // @Param: LAND_R_MULT
     // @DisplayName: Landed roll gain multiplier
-    // @Description: Roll gain multiplier active when landed. A factor of 1.0 means no reduction in gain while landed. Reduce this factor to reduce ground oscitation in the roll axis. 
+    // @Description: Roll gain multiplier active when landed. A factor of 1.0 means no reduction in gain while landed. Reduce this factor to reduce ground oscitation in the roll axis.
     // @Range: 0.25 1.0
     // @User: Advanced
     AP_GROUPINFO("LAND_R_MULT", 21, AC_AttitudeControl, _land_roll_mult, 1.0),
 
     // @Param: LAND_P_MULT
     // @DisplayName: Landed pitch gain multiplier
-    // @Description: Pitch gain multiplier active when landed. A factor of 1.0 means no reduction in gain while landed. Reduce this factor to reduce ground oscitation in the pitch axis. 
+    // @Description: Pitch gain multiplier active when landed. A factor of 1.0 means no reduction in gain while landed. Reduce this factor to reduce ground oscitation in the pitch axis.
     // @Range: 0.25 1.0
     // @User: Advanced
     AP_GROUPINFO("LAND_P_MULT", 22, AC_AttitudeControl, _land_pitch_mult, 1.0),
 
     // @Param: LAND_Y_MULT
     // @DisplayName: Landed yaw gain multiplier
-    // @Description: Yaw gain multiplier active when landed. A factor of 1.0 means no reduction in gain while landed. Reduce this factor to reduce ground oscitation in the yaw axis. 
+    // @Description: Yaw gain multiplier active when landed. A factor of 1.0 means no reduction in gain while landed. Reduce this factor to reduce ground oscitation in the yaw axis.
     // @Range: 0.25 1.0
     // @User: Advanced
     AP_GROUPINFO("LAND_Y_MULT", 23, AC_AttitudeControl, _land_yaw_mult, 1.0),
@@ -696,6 +697,9 @@ void AC_AttitudeControl::input_thrust_vector_rate_heading(const Vector3f& thrust
     Vector3f attitude_error;
     float returned_thrust_vector_angle;
     thrust_vector_rotation_angles(thrust_vec_quat, _attitude_target, thrust_vec_correction_quat, attitude_error, returned_thrust_vector_angle, thrust_vector_diff_angle);
+    if(DISABLE_POSITION_HEADING_LOITER) {
+        attitude_error.z = 0.0f;
+    }
 
     if (_rate_bf_ff_enabled) {
         // When yaw acceleration limiting is enabled, the yaw input shaper constrains angular acceleration about the yaw axis, slewing
@@ -706,6 +710,8 @@ void AC_AttitudeControl::input_thrust_vector_rate_heading(const Vector3f& thrust
         // When yaw acceleration limiting is enabled, the yaw input shaper constrains angular acceleration about the yaw axis, slewing
         // the output rate towards the input rate.
         _ang_vel_target.z = input_shaping_ang_vel(_ang_vel_target.z, heading_rate, get_accel_yaw_max_radss(), _dt, _rate_y_tc);
+        // SBL NOTE, stabilize uses
+        // attitude_control->input_euler_angle_roll_pitch_euler_rate_yaw(UNUSED, UNUSED, target_yaw_rate);
 
         // Limit the angular velocity
         ang_vel_limit(_ang_vel_target, radians(_ang_vel_roll_max), radians(_ang_vel_pitch_max), radians(_ang_vel_yaw_max));
@@ -723,7 +729,7 @@ void AC_AttitudeControl::input_thrust_vector_rate_heading(const Vector3f& thrust
     ang_vel_to_euler_rate(_attitude_target, _ang_vel_target, _euler_rate_target);
 
     // Call quaternion attitude controller
-    attitude_controller_run_quat();
+    attitude_controller_run_quat(DISABLE_POSITION_HEADING_LOITER);
 }
 
 // Command a thrust vector, heading and heading rate
@@ -835,7 +841,7 @@ void AC_AttitudeControl::update_attitude_target()
 }
 
 // Calculates the body frame angular velocities to follow the target attitude
-void AC_AttitudeControl::attitude_controller_run_quat()
+void AC_AttitudeControl::attitude_controller_run_quat(bool disable_position_heading)
 {
     // This represents a quaternion rotation in NED frame to the body
     Quaternion attitude_body;
@@ -844,6 +850,9 @@ void AC_AttitudeControl::attitude_controller_run_quat()
     // This vector represents the angular error to rotate the thrust vector using x and y and heading using z
     Vector3f attitude_error;
     thrust_heading_rotation_angles(_attitude_target, attitude_body, attitude_error, _thrust_angle, _thrust_error_angle);
+    if(disable_position_heading && DISABLE_POSITION_HEADING_LOITER) {
+        attitude_error.z = 0.0f;
+    }
 
     // Compute the angular velocity corrections in the body frame from the attitude error
     Vector3f ang_vel_body = update_ang_vel_target_from_att_error(attitude_error);
@@ -908,7 +917,7 @@ void AC_AttitudeControl::thrust_vector_rotation_angles(const Quaternion& attitud
     const Vector3f thrust_vector_up{0.0f, 0.0f, -1.0f};
 
     // attitude_target and attitude_body are passive rotations from target / body frames to the NED frame
-    
+
     // Rotating [0,0,-1] by attitude_target expresses (gets a view of) the target thrust vector in the inertial frame
     Vector3f att_target_thrust_vec = attitude_target * thrust_vector_up; // target thrust vector
 
