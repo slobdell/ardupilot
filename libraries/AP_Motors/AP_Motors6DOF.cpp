@@ -154,6 +154,9 @@ bool AP_Motors6DOF::init(uint8_t expected_num_motors) {
     if(LATERAL_MOTORS_CONFIG4) {
       wantMotors = 8;
     }
+    if (CATERPILLAR_H_FRAME_6DOF) {
+      wantMotors = 9;
+    }
     uint8_t num_motors = 0;
     for(uint8_t i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
         if (motor_enabled[i]) {
@@ -184,6 +187,9 @@ void AP_Motors6DOF::setup_motors(motor_frame_class frame_class, motor_frame_type
     if(LATERAL_MOTORS_CONFIG4) {
       wantMotors = 8;
     }
+    if (CATERPILLAR_H_FRAME_6DOF) {
+      wantMotors = 9;
+    }
     for(int i=0; i < wantMotors; i++) {
         _motor_reverse[i].set_and_save(1);
     }
@@ -210,13 +216,18 @@ void AP_Motors6DOF::setup_motors(motor_frame_class frame_class, motor_frame_type
     float forward = 1.0;
     float lateral = 1.0;
 
-    add_motor_raw_6dof(AP_MOTORS_MOT_1, rollRight, pitchDown, noYaw, 1.0, noForward, noLateral, 1);
-    // top right
-    add_motor_raw_6dof(AP_MOTORS_MOT_2, -rollRight, pitchDown, noYaw, 1.0, noForward, noLateral, 2);
-    // bottom right
-    add_motor_raw_6dof(AP_MOTORS_MOT_3, -rollRight, -pitchDown, noYaw, 1.0, noForward, noLateral, 3);
-    // bottom left
-    add_motor_raw_6dof(AP_MOTORS_MOT_4, rollRight, -pitchDown, noYaw, 1.0, noForward, noLateral, 4);
+    // motor num, roll, pitch, yaw, throttle, forward, lat, test order
+
+    if(!CATERPILLAR_H_FRAME_6DOF) {
+      // top left
+      add_motor_raw_6dof(AP_MOTORS_MOT_1, rollRight, pitchDown, noYaw, 1.0, noForward, noLateral, 1);
+      // top right
+      add_motor_raw_6dof(AP_MOTORS_MOT_2, -rollRight, pitchDown, noYaw, 1.0, noForward, noLateral, 2);
+      // bottom right
+      add_motor_raw_6dof(AP_MOTORS_MOT_3, -rollRight, -pitchDown, noYaw, 1.0, noForward, noLateral, 3);
+      // bottom left
+      add_motor_raw_6dof(AP_MOTORS_MOT_4, rollRight, -pitchDown, noYaw, 1.0, noForward, noLateral, 4);
+    }
 
     if(LATERAL_MOTORS_CONFIG4) {
         // bottom
@@ -227,6 +238,26 @@ void AP_Motors6DOF::setup_motors(motor_frame_class frame_class, motor_frame_type
         add_motor_raw_6dof(AP_MOTORS_MOT_7, noRoll, noPitch, yawFactorCW, 0.0, noForward, lateral, 7);
         // right
         add_motor_raw_6dof(AP_MOTORS_MOT_8, noRoll, noPitch, yawFactorCCW, 0.0, forward, noLateral, 8);
+    } else if (CATERPILLAR_H_FRAME_6DOF) {
+        // top right
+        add_motor_raw_6dof(AP_MOTORS_MOT_1, -rollRight, pitchDown, yawFactorCCW, 1.0, noForward, noLateral, 1);
+        // middle right
+        add_motor_raw_6dof(AP_MOTORS_MOT_2, -rollRight, noPitch, noYaw, 1.0, noForward, noLateral, 2);
+        // bottom right
+        add_motor_raw_6dof(AP_MOTORS_MOT_3, -rollRight, -pitchDown, yawFactorCW, 1.0, noForward, noLateral, 3);
+        // bottom left
+        add_motor_raw_6dof(AP_MOTORS_MOT_4, rollRight, -pitchDown, yawFactorCCW, 1.0, noForward, noLateral, 4);
+        // middle left
+        add_motor_raw_6dof(AP_MOTORS_MOT_5, rollRight, noPitch, noYaw, 1.0, noForward, noLateral, 5);
+        // top left
+        add_motor_raw_6dof(AP_MOTORS_MOT_6, rollRight, pitchDown, yawFactorCW, 1.0, noForward, noLateral, 6);
+
+        // motor throttle
+        add_motor_raw_6dof(AP_MOTORS_MOT_7, noRoll, noPitch, noYaw, 1.0, noForward, noLateral, 7);
+        // pure forward
+        add_motor_raw_6dof(AP_MOTORS_MOT_8, noRoll, noPitch, noYaw, 0.0, forward, noLateral, 8);
+        // pure lateral
+        add_motor_raw_6dof(AP_MOTORS_MOT_9, noRoll, noPitch, noYaw, 0.0, noForward, lateral, 9);
     } else {
         // front right
         add_motor_raw_6dof(AP_MOTORS_MOT_5, noRoll, noPitch, yawFactorCW, 0.0, -forward, noLateral, 5);
@@ -493,7 +524,12 @@ void AP_Motors6DOF::output_armed_stabilizing()
         if(LIFTING_MOTORS_REVERSIBLE) {
             throttle_thrust = get_throttle_bidirectional();
         } else {
-            const float compensation_gain = thr_lin.get_compensation_gain(); // compensation for battery voltage and altitude
+            float compensation_gain = 1.0;
+            // thrust linearization accounted for on the end motor controller
+            // units.
+            if(!CATERPILLAR_H_FRAME_6DOF) {
+              compensation_gain = thr_lin.get_compensation_gain(); // compensation for battery voltage and altitude
+            }
             throttle_thrust = get_throttle() * compensation_gain;
         }
         forward_thrust = _forward_in;
@@ -729,8 +765,12 @@ void AP_Motors6DOF::output_armed_stabilizing_vectored_6dof()
     if(LIFTING_MOTORS_REVERSIBLE) {
         throttle_thrust = get_throttle_bidirectional();
     } else {
-        // SBL modified here
-        const float compensation_gain = thr_lin.get_compensation_gain(); // compensation for battery voltage and altitude
+        float compensation_gain = 1.0;
+        // thrust linearization accounted for on the end motor controller
+        // units.
+        if(!CATERPILLAR_H_FRAME_6DOF) {
+          compensation_gain = thr_lin.get_compensation_gain(); // compensation for battery voltage and altitude
+        }
         throttle_thrust = get_throttle() * compensation_gain;
     }
     forward_thrust = _forward_in;

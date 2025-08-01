@@ -6,6 +6,10 @@
 #define FORCE_6DOF_ATTITUDE_CONTROLLER false
 // set this to false when not in use
 #define LATERAL_MOTORS_CONFIG4 false
+
+// set this to hack in the motor config for the caterpillar H frame
+#define CATERPILLAR_H_FRAME_6DOF false
+
 // set this to false when not in use
 #define LIFTING_MOTORS_REVERSIBLE false
 #define MOT_SPIN_NEUTRAL 1500
