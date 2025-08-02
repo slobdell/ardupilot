@@ -1321,6 +1321,7 @@ public:
 #if AC_PRECLAND_ENABLED
     void set_precision_loiter_enabled(bool value) { _precision_loiter_enabled = value; }
 #endif
+    bool allows_weathervaning(void) const override { return true; }
 
 protected:
 

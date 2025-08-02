@@ -43,6 +43,11 @@
 // airfame.
 #define DISABLE_SENSOR_ROTATION false
 
-#define DISABLE_POSITION_HEADING_LOITER true
+// this should only be set to true if the aircraft naturally weathervanes.
+#define DISABLE_POSITION_HEADING_LOITER false
+
+// needs to be used in conjunction with WEATHERVANE_ENABLED. This will
+// force loiter mode to weathervane.
+#define CUSTOM_WEATHERVANE true
 
 #endif // CUSTOM_CONFIG_H

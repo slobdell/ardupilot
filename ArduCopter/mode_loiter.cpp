@@ -1,4 +1,5 @@
 #include "Copter.h"
+#include "custom_config.h"
 
 #if MODE_LOITER_ENABLED
 
@@ -102,7 +103,9 @@ void ModeLoiter::run()
         loiter_nav->set_pilot_desired_acceleration(target_roll, target_pitch);
 
         // get pilot's desired yaw rate
-        target_yaw_rate = get_pilot_desired_yaw_rate();
+        if(!CUSTOM_WEATHERVANE) {
+          target_yaw_rate = get_pilot_desired_yaw_rate();
+        }
 
         // get pilot desired climb rate
         target_climb_rate = get_pilot_desired_climb_rate(channel_throttle->get_control_in());
@@ -112,6 +115,8 @@ void ModeLoiter::run()
         loiter_nav->clear_pilot_desired_acceleration();
     }
 
+        // const AC_AttitudeControl::HeadingCommand heading_command = auto_yaw.get_heading();
+
     // relax loiter target if we might be landed
     if (copter.ap.land_complete_maybe) {
         loiter_nav->soften_for_landing();
@@ -119,6 +124,11 @@ void ModeLoiter::run()
 
     // Loiter State Machine Determination
     AltHoldModeState loiter_state = get_alt_hold_state(target_climb_rate);
+
+    AC_AttitudeControl::HeadingCommand heading_command;
+    if(CUSTOM_WEATHERVANE) {
+        heading_command = Mode::auto_yaw.get_heading();
+    }
 
     // Loiter State Machine
     switch (loiter_state) {
@@ -128,7 +138,11 @@ void ModeLoiter::run()
         attitude_control->reset_yaw_target_and_rate();
         pos_control->relax_z_controller(0.0f);   // forces throttle output to decay to zero
         loiter_nav->init_target();
-        attitude_control->input_thrust_vector_rate_heading(loiter_nav->get_thrust_vector(), target_yaw_rate, false);
+        if(CUSTOM_WEATHERVANE) {
+          attitude_control->input_thrust_vector_heading(loiter_nav->get_thrust_vector(), heading_command);
+        } else {
+          attitude_control->input_thrust_vector_rate_heading(loiter_nav->get_thrust_vector(), target_yaw_rate, false);
+        }
         break;
 
     case AltHoldModeState::Landed_Ground_Idle:
@@ -138,7 +152,11 @@ void ModeLoiter::run()
     case AltHoldModeState::Landed_Pre_Takeoff:
         attitude_control->reset_rate_controller_I_terms_smoothly();
         loiter_nav->init_target();
-        attitude_control->input_thrust_vector_rate_heading(loiter_nav->get_thrust_vector(), target_yaw_rate, false);
+        if(CUSTOM_WEATHERVANE) {
+          attitude_control->input_thrust_vector_heading(loiter_nav->get_thrust_vector(), heading_command);
+        } else {
+          attitude_control->input_thrust_vector_rate_heading(loiter_nav->get_thrust_vector(), target_yaw_rate, false);
+        }
         pos_control->relax_z_controller(0.0f);   // forces throttle output to decay to zero
         break;
 
@@ -158,7 +176,11 @@ void ModeLoiter::run()
         loiter_nav->update();
 
         // call attitude controller
-        attitude_control->input_thrust_vector_rate_heading(loiter_nav->get_thrust_vector(), target_yaw_rate, false);
+        if(CUSTOM_WEATHERVANE) {
+          attitude_control->input_thrust_vector_heading(loiter_nav->get_thrust_vector(), heading_command);
+        } else {
+          attitude_control->input_thrust_vector_rate_heading(loiter_nav->get_thrust_vector(), target_yaw_rate, false);
+        }
         break;
 
     case AltHoldModeState::Flying:
@@ -186,7 +208,11 @@ void ModeLoiter::run()
 #endif
 
         // call attitude controller
-        attitude_control->input_thrust_vector_rate_heading(loiter_nav->get_thrust_vector(), target_yaw_rate, false);
+        if(CUSTOM_WEATHERVANE) {
+          attitude_control->input_thrust_vector_heading(loiter_nav->get_thrust_vector(), heading_command);
+        } else {
+          attitude_control->input_thrust_vector_rate_heading(loiter_nav->get_thrust_vector(), target_yaw_rate, false);
+        }
 
         // get avoidance adjusted climb rate
         target_climb_rate = get_avoidance_adjusted_climbrate(target_climb_rate);
