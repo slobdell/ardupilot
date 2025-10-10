@@ -402,6 +402,8 @@ bool Copter::set_mode(const uint8_t new_mode, const ModeReason reason)
     return copter.set_mode(static_cast<Mode::Number>(new_mode), reason);
 }
 
+#include "custom_main.h"
+
 // update_flight_mode - calls the appropriate attitude controllers based on flight mode
 // called at 100hz or more
 void Copter::update_flight_mode()
@@ -411,7 +413,12 @@ void Copter::update_flight_mode()
 #endif
     attitude_control->landed_gain_reduction(copter.ap.land_complete); // Adjust gains when landed to attenuate ground oscillation
 
+    // run the custom loop if enabled
+#if RUN_CUSTOM_LOOP
+    newMain();
+#else
     flightmode->run();
+#endif
 }
 
 // exit_mode - high level call to organise cleanup as a flight mode is exited

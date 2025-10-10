@@ -162,7 +162,7 @@ MAV_RESULT Copter::mavlink_motor_test_start(const GCS_MAVLINK &gcs_chan, uint8_t
             motor_count = 8;
         }
         if (CATERPILLAR_H_FRAME_6DOF) {
-          wantMotors = 9;
+          motor_count = 6;
         }
         if (motor_count == 0) {
             motor_count = 1;
