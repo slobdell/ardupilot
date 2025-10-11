@@ -25,6 +25,14 @@ void newMain()
     // This function is called at ~400Hz. We need to slow down our printing
     // to avoid flooding the serial port. A static counter is a simple way to do this.
     static uint16_t counter = 0;
+	if (!AP::ahrs().healthy()) {
+	  counter++;
+      if (counter % 100 == 0) {
+          AP_HAL::UARTDriver *debug_uart = AP::serialmanager().get_serial_by_id(SERIAL_NUM);
+          debug_uart->printf("Not arming because AHRS is not healthy.");
+      }
+      return;
+	}
 
     // Get attitude data
     float roll_rad = 0;
