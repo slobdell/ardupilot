@@ -2,7 +2,7 @@
 #define CUSTOM_CONFIG_H
 
 // set this to true to run the custom control loop in ArduCopter/mode.cpp
-#define RUN_CUSTOM_LOOP false
+#define RUN_CUSTOM_LOOP true
 
 // this flag can be used generally
 #define FORCE_6DOF_ATTITUDE_CONTROLLER false

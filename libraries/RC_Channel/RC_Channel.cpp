@@ -512,7 +512,7 @@ bool RC_Channel::has_override() const
         return false;
     }
 
-    uint32_t override_timeout_ms;
+    uint32_t override_timeout_ms = 0;
     if (!rc().get_override_timeout_ms(override_timeout_ms)) {
         // timeouts are disabled
         return true;
@@ -999,7 +999,7 @@ bool RC_Channel::init_position_on_first_radio_read(AUX_FUNC func) const
     case AUX_FUNC::PARACHUTE_RELEASE:
 #endif
 
-        // we do not want to process 
+        // we do not want to process
         return true;
     default:
         return false;
@@ -1376,7 +1376,7 @@ void RC_Channel::do_aux_function_fft_notch_tune(const AuxSwitchPos ch_flag)
 
 /**
  * Perform the RETRACT_MOUNT 1/2 process.
- * 
+ *
  * @param [in] ch_flag  Position of the switch. HIGH, MIDDLE and LOW.
  * @param [in] instance 0: RETRACT MOUNT 1 <br>
  *                      1: RETRACT MOUNT 2
