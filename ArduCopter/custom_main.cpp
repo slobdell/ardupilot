@@ -51,6 +51,7 @@ void newMain()
         debug_uart->printf("Attitude: R:%.1f P:%.1f Y:%.1f\n", roll_deg, pitch_deg, yaw_deg);
         exampleReadInput();
     }
+    exampleOutput();
 
     counter++;
 }
@@ -63,6 +64,9 @@ void exampleReadInput() {
 		sbus_in[i] = RC_Channels::get_radio_in(i);
 	}
 
+    // 368 -> 1105
+    // 1024 -> 1515
+    // 1680 -> 1925
 	debug_uart->printf("SBUS: 1:%u 2:%u 3:%u 4:%u 5:%u 6:%u 7:%u 8:%u 9:%u 10:%u 11:%u 12:%u 13:%u 14:%u 15:%u 16:%u\n",
 						sbus_in[0], sbus_in[1], sbus_in[2], sbus_in[3],
 						sbus_in[4], sbus_in[5], sbus_in[6], sbus_in[7],
@@ -83,6 +87,10 @@ void exampleOutput()
 {
     // SRV_Channels are 0-based, so Channel 1 is index 0.
     // The values are standard PWM microseconds.
+    // 201 -> 1000
+    // 1001 -> 1500
+    // 1801 -> 2000
+    // 1161 -> 1600
 
     SRV_Channels::set_output_pwm_chan(0, 1000);
 
@@ -97,6 +105,8 @@ void exampleOutput()
 
     // Channel 4: Set to a unique, arbitrary value for easy identification
     SRV_Channels::set_output_pwm_chan(4, 1234);
+
+    SRV_Channels::set_output_pwm_chan(4, 1600);
 
     // Channels 5-16 will default to their trim value (usually 1500) or 0 if not enabled.
 }

@@ -89,8 +89,11 @@ void Copter::init_ardupilot()
     // gcs().send_text(MAV_SEVERITY_INFO,"SBL INIT RC OUT system");
     init_rc_out();
 
-    // check if we should enter esc calibration mode
-    esc_calibration_startup_check();
+    // this will take non-zero throttle input, which in our case is arbitrary, so disable this check entirely because our boards would never support this feature.
+    if(!RUN_CUSTOM_LOOP) {
+        // check if we should enter esc calibration mode
+        esc_calibration_startup_check();
+    }
 
     // motors initialised so parameters can be sent
     ap.initialised_params = true;
@@ -486,7 +489,7 @@ void Copter::allocate_motors(void)
         AP_BoardConfig::allocation_error("AttitudeControl");
     }
     AP_Param::load_object_from_eeprom(attitude_control, attitude_control_var_info);
-        
+
     pos_control = NEW_NOTHROW AC_PosControl(*ahrs_view, inertial_nav, *motors, *attitude_control);
     if (pos_control == nullptr) {
         AP_BoardConfig::allocation_error("PosControl");
