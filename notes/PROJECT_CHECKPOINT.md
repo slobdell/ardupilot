@@ -39,3 +39,42 @@ A hardware-in-the-loop (HITL) test was performed to validate SBUS functionality 
 2.  **Output Validation:** The flight controller's `exampleOutput()` function was used to send known PWM microsecond values to the SBUS Output port. The SBUS Reader's serial log was monitored to confirm that it was receiving and correctly parsing the corresponding raw SBUS values.
 
 This closed-loop test successfully validated the entire SBUS data path and confirmed the scaling formulas used by ArduPilot.
+
+---
+
+# Project Checkpoint: TVC Logic Integration
+
+This section summarizes the successful porting of the Thrust Vectoring Controller (TVC) logic into the main ArduPilot custom firmware. The primary goal of this checkpoint—to replicate the behavior of the standalone TVC prototype within the ArduPilot ecosystem—has been accomplished at the code level.
+
+## 4. Feature Summary
+
+- **TVC Logic Ported:** The core control logic from the Gemini-generated `thrust-vector-controller.ino` project has been fully integrated into the `custom_main.cpp` file.
+- **Custom Libraries Integrated:** The validated, standalone `PID` and `filters` libraries have been successfully added to the ArduCopter build, ensuring the control algorithms are identical to the prototype.
+- **ArduPilot HAL Integration:** All hardware-specific code from the prototype has been replaced with robust ArduPilot HAL equivalents. This includes:
+    - **State Estimation:** Raw IMU reading and Madgwick filtering have been replaced by direct calls to ArduPilot's EKF, using `AP::vehicle()->get_osd_roll_pitch_rad()` for attitude and `copter.attitude_control->get_latest_gyro()` for filtered angular rates.
+    - **Input/Output:** Standalone SBUS libraries have been replaced with the standard `RC_Channels` and `SRV_Channels` APIs for reading pilot commands and writing vectoring commands.
+- **Advanced Control Strategy Implemented:** A sophisticated "Per-Pod Output Scaling" feature has been implemented to address the problem of differing motor authority. This logic is controlled by a `PER_POD_SCALING` feature flag.
+
+## 5. Current State: Validated Logic (Untested)
+
+This checkpoint represents a "code complete" status for the TVC integration. The logic is believed to be a sound and faithful implementation of the design, but it has **not yet been validated through compilation or hardware testing.**
+
+### 5.1. Core Logic (Believed Valid)
+
+- The cascaded PID control structure, gain scheduling based on global command magnitude, and thrust compensation factor calculation have been ported line-for-line.
+- The failsafe logic and motor-off detection have been adapted to use ArduPilot's `rc().in_rc_failsafe()` and PWM-based thresholds.
+
+### 5.2. Per-Pod Scaling Feature (Believed Valid)
+
+- When `PER_POD_SCALING` is `true`, the code correctly calculates the average `base_throttle` across all pods.
+- It then computes a unique scale factor for each pod (`average_throttle / pod_throttle`) to determine how much of the global vectoring command to apply.
+- It correctly formats and sends a 13-channel SBUS output frame containing the 12 unique scaled vector commands and the 1 global thrust factor.
+- When the flag is `false`, the code reverts to the original, simpler logic of broadcasting 3 global channels.
+
+### 5.3. Next Steps
+
+The immediate next step is to compile the firmware and resolve any remaining build errors. Following a successful compilation, a comprehensive bench test is required to validate the following:
+- Correct reading of all RC input channels.
+- Correct calculation and output of the 13-channel SBUS data stream.
+- Correct response of the PID controllers and gain scheduling logic to simulated inputs.
+- Correct behavior of the `PER_POD_SCALING` feature flag.

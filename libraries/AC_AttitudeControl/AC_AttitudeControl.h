@@ -458,6 +458,10 @@ public:
     // write ANG message
     void Write_ANG() const;
 
+    // SBL moved to public to support custom_main.cpp
+    // get the latest gyro for the purposes of attitude control
+    const Vector3f get_latest_gyro() const;
+
     // User settable parameters
     static const struct AP_Param::GroupInfo var_info[];
 
@@ -474,9 +478,6 @@ protected:
 
     // Return the yaw slew rate limit in radians/s
     float get_slew_yaw_max_rads() const { return radians(get_slew_yaw_max_degs()); }
-
-    // get the latest gyro for the purposes of attitude control
-    const Vector3f get_latest_gyro() const;
 
     // Maximum rate the yaw target can be updated in Loiter, RTL, Auto flight modes
     AP_Float            _slew_yaw;

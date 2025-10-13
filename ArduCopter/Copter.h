@@ -224,6 +224,9 @@ public:
     friend class ModeAutorotate;
     friend class ModeTurtle;
 
+    // SBL moved to public in order to support custom_main.cpp
+    AC_AttitudeControl *attitude_control;
+
     friend class _AutoTakeoff;
 
     friend class PayloadPlace;
@@ -474,7 +477,6 @@ private:
 
     // Attitude, Position and Waypoint navigation objects
     // To-Do: move inertial nav up or other navigation variables down here
-    AC_AttitudeControl *attitude_control;
     const struct AP_Param::GroupInfo *attitude_control_var_info;
     AC_PosControl *pos_control;
     AC_WPNav *wp_nav;
