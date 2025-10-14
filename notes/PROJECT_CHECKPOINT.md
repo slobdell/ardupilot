@@ -136,3 +136,42 @@ To create a test harness for the TVC logic, a developer should:
     *   Asserting that the values in the returned `TVC_Outputs` struct match the expected results.
 
 This enables rapid, iterative development and validation of the control logic without the slow feedback loop of compiling and flashing the entire firmware.
+
+---
+
+# Project Checkpoint: Core Logic Validation via Unit Testing
+
+This section documents the successful and comprehensive validation of the core Thrust Vectoring Controller (TVC) logic through a purpose-built, standalone unit test harness.
+
+## 8. Feature Summary
+
+- **Standalone Test Harness:** A dedicated test environment was created in the `tests/custom_main_test` directory. This allows the core C++ logic to be compiled and tested on a host machine, completely independent of the ArduPilot build system.
+- **Comprehensive Test Suite:** A suite of tests was developed in `main_test.cpp` to validate every major aspect of the control algorithm.
+- **Core Logic Validated:** All tests passed, providing a high degree of confidence in the correctness and stability of the `tvc_run_main_logic` function.
+
+## 9. Validation Details
+
+The test suite was designed to cover a wide range of scenarios, from basic helper functions to a dynamic simulation.
+
+### 9.1. Test Coverage
+
+- **Helper Functions:** All utility functions (`sbus_pwm_to_float`, `float_to_sbus_pwm`, `constrain_float`, `degrees`) were validated against known inputs and outputs.
+- **Safety Scenarios:** The system's response to critical events was explicitly tested, including:
+    - **Failsafe:** Verified that outputs return to a neutral state.
+    - **Motor-Off Command:** Verified that outputs return to a neutral state when motors are commanded off.
+    - **Saturation:** Verified that the `clip_vectors_for_saturation` function correctly clamps vector commands when motor headroom is limited and that the `saturated` flags are properly set.
+- **Control Logic:** The primary control paths were validated:
+    - **Zero Input:** Confirmed that neutral stick inputs result in zero vectoring commands and a thrust factor of 1.0.
+    - **Forward/Lateral Commands:** Confirmed that stick inputs correctly produce the corresponding pitch/roll vector commands.
+    - **Thrust Compensation:** The `thrust_factor` calculation was rigorously tested across a 2D spectrum of forward and lateral commands to ensure its correctness.
+- **Dynamic Stability:** An integration-style simulation was created to test the closed-loop stability of the PID controllers under a dynamic (sine wave) stick input, confirming the system remains stable and returns to a neutral state.
+
+### 9.2. Bug Discovery and Fix
+
+This testing process successfully identified and led to the correction of a critical bug in the `thrust_factor` calculation. The original code was basing the calculation on a clamped, physically-limited angle instead of the pilot's true commanded angle. The logic was corrected to use the unclamped angle for the compensation calculation, ensuring the system generates the correct total thrust to maintain altitude during aggressive maneuvers. This fix was then applied back to the production `ArduCopter/custom_main.cpp` file.
+
+## 10. Current State and Next Steps
+
+This checkpoint marks the successful validation of the core TVC algorithm. The logic is now considered stable, correct, and ready for the next phase of testing.
+
+The immediate next step is to compile the validated firmware and perform a comprehensive bench test (hardware-in-the-loop) to ensure the "humble object" layer is correctly integrating the pure logic with the ArduPilot HAL.

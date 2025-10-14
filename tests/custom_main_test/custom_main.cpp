@@ -50,17 +50,6 @@ float sbus_pwm_to_float(int pwm, float min_float, float max_float);
 int float_to_sbus_pwm(float float_val, float min_float, float max_float);
 void clip_vectors_for_saturation(float base_throttles[], float* vector_pitch, float* vector_roll, bool& pitch_saturated, bool& roll_saturated);
 
-// Helper to constrain a float value
-static inline float constrain_float(float val, float min, float max) {
-    return std::min(max, std::max(min, val));
-}
-
-// Helper to convert radians to degrees
-static inline float degrees(float rad) {
-    return rad * (180.0f / M_PI);
-}
-
-
 // =============================================================================
 // --- CORE LOGIC IMPLEMENTATION (No HAL Dependencies) ---
 // =============================================================================
@@ -109,6 +98,11 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
         state.roll_rate_pid.reset();
         state.target_pitch_rate_filter.filterIn(0);
         state.target_roll_rate_filter.filterIn(0);
+        
+        // Also zero out debug data for consistent test results
+        outputs.debug_data = {};
+        outputs.debug_data.thrust_factor = 1.0f;
+
         return outputs;
     }
 
