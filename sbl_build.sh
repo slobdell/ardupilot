@@ -21,3 +21,8 @@ cp ./build/$BOARD/bin/arducopter_with_bl.hex ./arducopter_with_bl.hex
 cp ./build/$BOARD/bin/arducopter ~/Desktop/arducopter.elf
 cp ./build/$BOARD/bin/arducopter ./arducopter.elf
 # openocd -f interface/stlink.cfg -f target/stm32h7x.cfg -c "program arducopter.elf verify reset exit"
+#
+# FOR TESTING
+# ./waf configure --board sitl
+# ./waf tests
+# cd tests/custom_main_test; make; ./tvc_test
