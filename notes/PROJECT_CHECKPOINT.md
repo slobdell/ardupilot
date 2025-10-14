@@ -78,3 +78,61 @@ The immediate next step is to compile the firmware and resolve any remaining bui
 - Correct calculation and output of the 13-channel SBUS data stream.
 - Correct response of the PID controllers and gain scheduling logic to simulated inputs.
 - Correct behavior of the `PER_POD_SCALING` feature flag.
+---
+
+# Project Checkpoint: Testability and Modularization Refactoring
+
+This section documents the successful architectural refactoring of the custom Thrust Vectoring Controller (TVC) logic. The primary goal of this effort was to decouple the core control algorithm from the ArduPilot Hardware Abstraction Layer (HAL), enabling robust, standalone unit testing.
+
+## 6. The "Humble Object" Architecture
+
+The refactoring was centered around the "Humble Object" design pattern. This pattern isolates complex, testable logic from the messy, framework-dependent I/O operations.
+
+### 6.1. Problem: Untestable Code
+
+The initial implementation, while functionally correct, was tightly coupled to the ArduPilot ecosystem. The main `newMain()` function directly called HAL functions for reading sensors, accessing RC inputs, and writing servo outputs. This made it impossible to test the core logic (e.g., PID calculations, gain scheduling, saturation checks) without compiling and flashing the entire ArduPilot firmware.
+
+### 6.2. Solution: Separation of Concerns
+
+The code was physically and logically separated into two distinct modules with a clear boundary:
+
+1.  **The Humble I/O Layer (`custom_main_ardupilot.cpp`):** This file contains the `newMain()` function. Its *only* responsibility is to interact with the ArduPilot HAL. It gathers all sensor and RC data, calls the core logic function, and then writes the results back to the servos and the debug serial port.
+
+2.  **The Pure Logic Core (`custom_main.cpp`):** This file contains the `tvc_run_main_logic()` function. This function is now a "pure" function—it has no side effects and contains zero dependencies on the ArduPilot HAL. It operates exclusively on data passed to it via structs.
+
+### 6.3. The Data Contract API
+
+A formal API, or "seam," was created in `custom_main.h` to connect the two modules. This API consists of several key `structs`:
+
+-   `TVC_Inputs`: A structure that holds all data read from the HAL for a single loop cycle (RC inputs, sensor values, timestamps, etc.).
+-   `TVC_Outputs`: A structure that holds the complete result from the core logic (final SBUS PWM values for all channels and all intermediate values needed for logging).
+-   `TVC_State`: A structure that encapsulates all data that must persist between loop cycles (the PID controller objects, filters, and saturation flags).
+
+This contract ensures a clean separation and allows the core logic to be treated as a black box.
+
+### 6.4. Dependency Removal
+
+A critical step was the removal of all ArduPilot-specific data types from the core logic module. For example, the `Vector3f` type used for gyroscope data was replaced with a platform-independent `TVC_Vector3f` struct, with the conversion handled in the I/O layer.
+
+## 7. Outcome and Next Steps: Standalone Testing
+
+As a result of this refactoring, the core TVC algorithm is now fully portable and testable. A developer can now create a standalone C++ test project to validate the control logic with complete confidence.
+
+### 7.1. Standalone Test Procedure
+
+To create a test harness for the TVC logic, a developer should:
+
+1.  **Create a new, empty C++ project.**
+2.  **Copy the required source files:**
+    *   `custom_main.h`
+    *   `custom_main.cpp`
+    *   `filters.h` & `filters.cpp`
+    *   `PID.h` & `PID.cpp`
+3.  **Write a test driver (e.g., `main_test.cpp`).** This driver will simulate the ArduPilot environment by:
+    *   Including `custom_main.h`.
+    *   Creating an instance of the `TVC_State` object.
+    *   Creating and populating a mock `TVC_Inputs` struct with desired test values (e.g., full forward command, specific gyro rates).
+    *   Calling the `tvc_run_main_logic()` function with the mock inputs.
+    *   Asserting that the values in the returned `TVC_Outputs` struct match the expected results.
+
+This enables rapid, iterative development and validation of the control logic without the slow feedback loop of compiling and flashing the entire firmware.
