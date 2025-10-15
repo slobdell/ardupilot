@@ -3,12 +3,16 @@
 #include <AP_Vehicle/AP_Vehicle.h>
 #include <AP_AHRS/AP_AHRS.h>
 #include <AP_HAL/AP_HAL.h>
+#include <AP_Notify/AP_Notify.h>
 #include <AP_SerialManager/AP_SerialManager.h>
 #include <RC_Channel/RC_Channel.h>
 #include <SRV_Channel/SRV_Channel.h>
 #include "filters.h"
 #include "PID.h"
 
+// =============================================================================
+// --- GLOBAL STATE & OBJECTS ---
+// =============================================================================
 // Global state variables for this file
 static uint32_t last_log_time = 0;
 static uint32_t loop_counter = 0;
@@ -70,10 +74,15 @@ void newMain()
     
     inputs.now_us = AP_HAL::micros();
 
-    // 2. --- CALL CORE LOGIC ---
+    // 5. --- CALL PURE LOGIC CORE ---
     TVC_Outputs outputs = tvc_run_main_logic(inputs, state, tvc_config);
 
-    // 3. --- WRITE OUTPUTS to HAL ---
+    // 6. --- UPDATE ARDUPILOT NOTIFICATION SYSTEM ---
+    // Set the AP_Notify EKF_BAD flag based on the TVC's health.
+    // If the TVC is unhealthy, this will force the main status LED red.
+    AP_Notify::flags.ekf_bad = !outputs.tvc_healthy;
+
+    // 7. --- WRITE OUTPUTS TO SBUS ---
     // Write SBUS outputs
     for (int i = 0; i < (NUM_PODS * 2 + 1); i++) {
         SRV_Channels::set_output_pwm_chan(i, outputs.sbus_outputs[i]);

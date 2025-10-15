@@ -85,6 +85,7 @@ struct TVC_Debug_Data {
 // Output structure: All data to be written to the ArduPilot HAL
 struct TVC_Outputs {
     int sbus_outputs[16];
+    bool tvc_healthy;
     TVC_Debug_Data debug_data;
 };
 

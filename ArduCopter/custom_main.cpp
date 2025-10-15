@@ -209,7 +209,10 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     outputs.debug_data.pitch_saturated = state.pitch_saturated;
     outputs.debug_data.roll_saturated = state.roll_saturated;
 
-    // 9. --- BROADCAST HEALTH STATUS ---
+    // 9. --- PASS HEALTH STATUS TO OUTPUTS ---
+    outputs.tvc_healthy = inputs.ahrs_healthy;
+
+    // 10. --- BROADCAST HEALTH STATUS ---
     // Use channel 16 (index 15) to signal health to the SFCs.
     if (inputs.ahrs_healthy) {
         outputs.sbus_outputs[15] = SBUS_MAX_PWM; // Healthy signal
