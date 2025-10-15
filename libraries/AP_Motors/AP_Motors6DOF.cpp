@@ -24,6 +24,16 @@
 
 #include "../../ArduCopter/custom_config.h"
 
+// --- RC-to-SBUS Pass-through Channel Definitions for In-Flight PID Tuning ---
+// The RC input channel (0-indexed) from the pilot's receiver for the gain selector switch.
+#define RC_INPUT_TUNING_SELECTOR_CHAN 12
+// The RC input channel (0-indexed) from the pilot's receiver for the gain value knob.
+#define RC_INPUT_TUNING_VALUE_CHAN 13
+// The motor output channel (0-indexed) to broadcast the selector switch value on.
+#define SBUS_OUTPUT_TUNING_SELECTOR_CHAN 12
+// The motor output channel (0-indexed) to broadcast the value knob on.
+#define SBUS_OUTPUT_TUNING_VALUE_CHAN 13
+
 uint32_t lastLogTime6 = 0;
 #define DEAD_BAND 0.05
 #define LOG_PERIOD 3000
@@ -532,6 +542,15 @@ void AP_Motors6DOF::output_armed_stabilizing()
             }
             throttle_thrust = get_throttle() * compensation_gain;
         }
+
+        // --- In-Flight PID Tuning Pass-through ---
+        #if CATERPILLAR_H_FRAME_6DOF
+            // Read the raw PWM from the pilot's RC inputs for the tuning channels
+            // and place them directly into the output array for SBUS broadcast.
+            _thrust_rpyt_out[SBUS_OUTPUT_TUNING_SELECTOR_CHAN] = pwm_to_thrust(hal.rcin->read(RC_INPUT_TUNING_SELECTOR_CHAN));
+            _thrust_rpyt_out[SBUS_OUTPUT_TUNING_VALUE_CHAN] = pwm_to_thrust(hal.rcin->read(RC_INPUT_TUNING_VALUE_CHAN));
+        #endif
+
         forward_thrust = _forward_in;
         lateral_thrust = _lateral_in;
 

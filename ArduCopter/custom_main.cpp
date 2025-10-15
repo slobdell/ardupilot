@@ -18,11 +18,13 @@
 #define MOTOR_OFF_THRESHOLD 1063 // SBUS PWM threshold for motors off
 
 // --- TVC Configuration Instance ---
+// This now defines two arbitrary points on the gain schedule spectrum.
+// The system will create a linear function based on these two points.
 const TVC_Config tvc_config = {
-    .pitch_rate_low   = {0.0036, 0.0036, 0.000011},
-    .pitch_rate_high  = {0.0018, 0.0036, 0.0000055},
-    .roll_rate_low    = {0.001, 0.001, 0.000005899},
-    .roll_rate_high   = {0.0005, 0.001, 0.0000029},
+    .pitch_rate_tune_point_low  = {0.25f, 0.0036f, 0.0036f, 0.000011f}, // Tuned at low thrust (e.g., 25%)
+    .pitch_rate_tune_point_high = {0.75f, 0.0018f, 0.0036f, 0.0000055f},// Tuned at high thrust (e.g., 75%)
+    .roll_rate_tune_point_low   = {0.25f, 0.001f, 0.001f, 0.000005899f},
+    .roll_rate_tune_point_high  = {0.75f, 0.0005f, 0.001f, 0.0000029f},
     .pitch_angle      = {1.5, 0.0, 0.015},
     .roll_angle       = {1.5, 0.0, 0.015},
     .i_max_angle      = 100.0,
@@ -35,10 +37,6 @@ const int THRUST_CHANNEL  = 6; // Channel 7
 const int FORWARD_CHANNEL = 7; // Channel 8
 const int LATERAL_CHANNEL = 8; // Channel 9
 
-// SBUS PWM Value Ranges
-const int SBUS_MIN_PWM = 1000;
-const int SBUS_MAX_PWM = 2000;
-
 // Corresponds to a thrust_factor limit of 2.0 (1/cos(60)).
 const float MAX_TARGET_ANGLE_DEG = 60.0f;
 const float MAX_SAFE_ANGLE_RAD = MAX_TARGET_ANGLE_DEG * (M_PI / 180.0);
@@ -47,7 +45,6 @@ const float max_tan_angle = tanf(MAX_TARGET_ANGLE_DEG * M_PI / 180.0);
 // =============================================================================
 // --- HELPER PROTOTYPES (Internal to this file) ---
 // =============================================================================
-float sbus_pwm_to_float(int pwm, float min_float, float max_float);
 int float_to_sbus_pwm(float float_val, float min_float, float max_float);
 void clip_vectors_for_saturation(float base_throttles[], float* vector_pitch, float* vector_roll, bool& pitch_saturated, bool& roll_saturated);
 
@@ -146,17 +143,54 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
         base_throttles[i] = sbus_pwm_to_float(inputs.rc_in[i], 0.0f, 1.0f);
     }
   
-    // 3. --- GAIN SCHEDULING ---
+    // 3. --- GAIN SCHEDULING (y = mx + c from two points) ---
     float vector_magnitude = sqrtf(powf(thrust_cmd, 2) + powf(forward_cmd, 2) + powf(lateral_cmd, 2));
     vector_magnitude = constrain_float(vector_magnitude, 0.0, 1.0);
-  
-    state.pitch_rate_pid.p = config.pitch_rate_low.p + (config.pitch_rate_high.p - config.pitch_rate_low.p) * vector_magnitude;
-    state.pitch_rate_pid.d = config.pitch_rate_low.d + (config.pitch_rate_high.d - config.pitch_rate_low.d) * vector_magnitude;
-    state.pitch_rate_pid.i = config.pitch_rate_low.i + (config.pitch_rate_high.i - config.pitch_rate_low.i) * vector_magnitude;
+#if !PID_TUNING_MODE
 
-    state.roll_rate_pid.p = config.roll_rate_low.p + (config.roll_rate_high.p - config.roll_rate_low.p) * vector_magnitude;
-    state.roll_rate_pid.d = config.roll_rate_low.d + (config.roll_rate_high.d - config.roll_rate_low.d) * vector_magnitude;
-    state.roll_rate_pid.i = config.roll_rate_low.i + (config.roll_rate_high.i - config.roll_rate_low.i) * vector_magnitude;
+    // --- Pitch Rate Gains ---
+    float pitch_thrust_delta = config.pitch_rate_tune_point_high.thrust_point - config.pitch_rate_tune_point_low.thrust_point;
+    if (fabsf(pitch_thrust_delta) < 1e-6) {
+        // Thrust points are the same, use the 'low' point as a constant gain to avoid division by zero.
+        state.pitch_rate_pid.p = config.pitch_rate_tune_point_low.p;
+        state.pitch_rate_pid.i = config.pitch_rate_tune_point_low.i;
+        state.pitch_rate_pid.d = config.pitch_rate_tune_point_low.d;
+    } else {
+        // Calculate slope (m) and y-intercept (c) for each gain
+        float p_gain_slope = (config.pitch_rate_tune_point_high.p - config.pitch_rate_tune_point_low.p) / pitch_thrust_delta;
+        float p_gain_y_intercept = config.pitch_rate_tune_point_low.p - p_gain_slope * config.pitch_rate_tune_point_low.thrust_point;
+        state.pitch_rate_pid.p = p_gain_slope * vector_magnitude + p_gain_y_intercept;
+
+        float i_gain_slope = (config.pitch_rate_tune_point_high.i - config.pitch_rate_tune_point_low.i) / pitch_thrust_delta;
+        float i_gain_y_intercept = config.pitch_rate_tune_point_low.i - i_gain_slope * config.pitch_rate_tune_point_low.thrust_point;
+        state.pitch_rate_pid.i = i_gain_slope * vector_magnitude + i_gain_y_intercept;
+
+        float d_gain_slope = (config.pitch_rate_tune_point_high.d - config.pitch_rate_tune_point_low.d) / pitch_thrust_delta;
+        float d_gain_y_intercept = config.pitch_rate_tune_point_low.d - d_gain_slope * config.pitch_rate_tune_point_low.thrust_point;
+        state.pitch_rate_pid.d = d_gain_slope * vector_magnitude + d_gain_y_intercept;
+    }
+
+    // --- Roll Rate Gains ---
+    float roll_thrust_delta = config.roll_rate_tune_point_high.thrust_point - config.roll_rate_tune_point_low.thrust_point;
+    if (fabsf(roll_thrust_delta) < 1e-6) {
+        // Thrust points are the same, use the 'low' point as a constant gain.
+        state.roll_rate_pid.p = config.roll_rate_tune_point_low.p;
+        state.roll_rate_pid.i = config.roll_rate_tune_point_low.i;
+        state.roll_rate_pid.d = config.roll_rate_tune_point_low.d;
+    } else {
+        float p_gain_slope = (config.roll_rate_tune_point_high.p - config.roll_rate_tune_point_low.p) / roll_thrust_delta;
+        float p_gain_y_intercept = config.roll_rate_tune_point_low.p - p_gain_slope * config.roll_rate_tune_point_low.thrust_point;
+        state.roll_rate_pid.p = p_gain_slope * vector_magnitude + p_gain_y_intercept;
+
+        float i_gain_slope = (config.roll_rate_tune_point_high.i - config.roll_rate_tune_point_low.i) / roll_thrust_delta;
+        float i_gain_y_intercept = config.roll_rate_tune_point_low.i - i_gain_slope * config.roll_rate_tune_point_low.thrust_point;
+        state.roll_rate_pid.i = i_gain_slope * vector_magnitude + i_gain_y_intercept;
+
+        float d_gain_slope = (config.roll_rate_tune_point_high.d - config.roll_rate_tune_point_low.d) / roll_thrust_delta;
+        float d_gain_y_intercept = config.roll_rate_tune_point_low.d - d_gain_slope * config.roll_rate_tune_point_low.thrust_point;
+        state.roll_rate_pid.d = d_gain_slope * vector_magnitude + d_gain_y_intercept;
+    }
+#endif // !PID_TUNING_MODE
 
     // 4. --- GET STATE & CALCULATE TARGETS ---
     float current_roll_deg = degrees(inputs.roll_rad);
@@ -217,6 +251,7 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     outputs.debug_data.forward_cmd = forward_cmd;
     outputs.debug_data.lateral_cmd = lateral_cmd;
     outputs.debug_data.thrust_cmd = thrust_cmd;
+    outputs.debug_data.vector_magnitude = vector_magnitude;
     outputs.debug_data.target_pitch_deg = target_pitch_deg;
     outputs.debug_data.target_roll_deg = target_roll_deg;
     outputs.debug_data.vector_pitch_out = vector_pitch_out;
@@ -243,12 +278,6 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
 // =============================================================================
 // --- HELPER IMPLEMENTATIONS (No HAL Dependencies) ---
 // =============================================================================
-
-float sbus_pwm_to_float(int pwm, float min_float, float max_float) {
-  // constrain_int16 is not available, use std::min/max
-  int constrained_pwm = std::min(SBUS_MAX_PWM, std::max(SBUS_MIN_PWM, pwm));
-  return (float)(constrained_pwm - SBUS_MIN_PWM) / (float)(SBUS_MAX_PWM - SBUS_MIN_PWM) * (max_float - min_float) + min_float;
-}
 
 int float_to_sbus_pwm(float float_val, float min_float, float max_float) {
   float_val = constrain_float(float_val, min_float, max_float);

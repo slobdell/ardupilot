@@ -17,14 +17,23 @@
 static uint32_t last_log_time = 0;
 static uint32_t loop_counter = 0;
 
+// --- In-Flight Tuning State ---
+#if PID_TUNING_MODE
+    static float tuned_p = 0;
+    static float tuned_i = 0;
+    static float tuned_d = 0;
+    static bool tuning_initialized = false;
+    static const char* currently_tuning = "P";
+#endif
+
 // =============================================================================
 // --- MAIN ENTRY POINT (Humble I/O Layer) ---
 // =============================================================================
 void newMain()
 {
     // Initialization of state and hardware
-    static LinearPIDController static_pitch_rate_pid(tvc_config.pitch_rate_low.p, tvc_config.pitch_rate_low.i, tvc_config.pitch_rate_low.d, tvc_config.i_max_pitch_rate);
-    static LinearPIDController static_roll_rate_pid(tvc_config.roll_rate_low.p, tvc_config.roll_rate_low.i, tvc_config.roll_rate_low.d, tvc_config.i_max_roll_rate);
+    static LinearPIDController static_pitch_rate_pid(tvc_config.pitch_rate_tune_point_low.p, tvc_config.pitch_rate_tune_point_low.i, tvc_config.pitch_rate_tune_point_low.d, tvc_config.i_max_pitch_rate);
+    static LinearPIDController static_roll_rate_pid(tvc_config.roll_rate_tune_point_low.p, tvc_config.roll_rate_tune_point_low.i, tvc_config.roll_rate_tune_point_low.d, tvc_config.i_max_roll_rate);
     static LinearPIDController static_pitch_angle_pid(tvc_config.pitch_angle.p, tvc_config.pitch_angle.i, tvc_config.pitch_angle.d, tvc_config.i_max_angle);
     static LinearPIDController static_roll_angle_pid(tvc_config.roll_angle.p, tvc_config.roll_angle.i, tvc_config.roll_angle.d, tvc_config.i_max_angle);
     static CustomFilter static_target_pitch_rate_filter(20.0 * 2, (1.0/400.0), IIR::ORDER::OD2, IIR::TYPE::LOWPASS);
@@ -74,6 +83,43 @@ void newMain()
     
     inputs.now_us = AP_HAL::micros();
 
+    // 2. --- (OPTIONAL) IN-FLIGHT PID TUNING ---
+    #if PID_TUNING_MODE
+        // Read the selector switch and value knob from the RC inputs.
+        uint16_t selector_pwm = inputs.rc_in[TUNING_SELECTOR_CHANNEL];
+        uint16_t value_pwm = inputs.rc_in[TUNING_VALUE_CHANNEL];
+
+        // Initialize gains on first run
+        if (!tuning_initialized) {
+            tuned_p = tvc_config.pitch_rate_tune_point_low.p;
+            tuned_i = tvc_config.pitch_rate_tune_point_low.i;
+            tuned_d = tvc_config.pitch_rate_tune_point_low.d;
+            tuning_initialized = true;
+        }
+
+        // Determine which gain is being tuned based on the 3-position switch.
+        if (selector_pwm < 1300) { // Position 1: Tune P Gain
+            currently_tuning = "P";
+            tuned_p = sbus_pwm_to_float(value_pwm, P_GAIN_MIN, P_GAIN_MAX);
+        } else if (selector_pwm < 1700) { // Position 2: Tune I Gain
+            currently_tuning = "I";
+            tuned_i = sbus_pwm_to_float(value_pwm, I_GAIN_MIN, I_GAIN_MAX);
+        } else { // Position 3: Tune D Gain
+            currently_tuning = "D";
+            tuned_d = sbus_pwm_to_float(value_pwm, D_GAIN_MIN, D_GAIN_MAX);
+        }
+
+        // Override the gains in the static PID controller objects.
+        // These will be used by tvc_run_main_logic in this loop cycle.
+        static_pitch_rate_pid.p = tuned_p;
+        static_pitch_rate_pid.i = tuned_i;
+        static_pitch_rate_pid.d = tuned_d;
+        // Apply to roll controller as well for symmetrical tuning.
+        static_roll_rate_pid.p = tuned_p;
+        static_roll_rate_pid.i = tuned_i;
+        static_roll_rate_pid.d = tuned_d;
+    #endif
+
     // 5. --- CALL PURE LOGIC CORE ---
     TVC_Outputs outputs = tvc_run_main_logic(inputs, state, tvc_config);
 
@@ -99,10 +145,15 @@ void newMain()
 
             debug_uart->printf("---------- TVC STATUS REPORT ----------\n");
             debug_uart->printf("SYSTEM | Freq: %.1f Hz\n", loop_hz);
-            debug_uart->printf("INPUTS | Fwd: %.2f, Lat: %.2f, Thr: %.2f\n", d.forward_cmd, d.lateral_cmd, d.thrust_cmd);
+            debug_uart->printf("INPUTS | Fwd: %.2f, Lat: %.2f, Thr: %.2f, Mag: %.2f\n", d.forward_cmd, d.lateral_cmd, d.thrust_cmd, d.vector_magnitude);
             debug_uart->printf("STATE  | Pitch curr: %.2f, targ: %.2f | Roll curr: %.2f, targ: %.2f\n", degrees(inputs.pitch_rad), d.target_pitch_deg, degrees(inputs.roll_rad), d.target_roll_deg);
             debug_uart->printf("PID    | Pitch sat: %d, out: %.3f | Roll sat: %d, out: %.3f\n", d.pitch_saturated, d.vector_pitch_out, d.roll_saturated, d.vector_roll_out);
             debug_uart->printf("OUTPUT | VecP: %.3f, VecR: %.3f, Factor: %.3f\n", d.vector_pitch_out, d.vector_roll_out, d.thrust_factor);
+            
+            #if PID_TUNING_MODE
+                debug_uart->printf("TUNING | SEL: %s | Mag: %.2f | P: %.6f, I: %.6f, D: %.6f\n", currently_tuning, d.vector_magnitude, tuned_p, tuned_i, tuned_d);
+            #endif
+
             debug_uart->printf("---------------------------------------\n");
         }
         last_log_time = current_time_ms;
