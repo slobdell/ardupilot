@@ -39,7 +39,8 @@ const int LATERAL_CHANNEL = 8; // Channel 9
 const int SBUS_MIN_PWM = 1000;
 const int SBUS_MAX_PWM = 2000;
 
-const float MAX_TARGET_ANGLE_DEG = 45.0f;
+// Corresponds to a thrust_factor limit of 2.0 (1/cos(60)).
+const float MAX_TARGET_ANGLE_DEG = 60.0f;
 const float MAX_SAFE_ANGLE_RAD = MAX_TARGET_ANGLE_DEG * (M_PI / 180.0);
 const float max_tan_angle = tanf(MAX_TARGET_ANGLE_DEG * M_PI / 180.0);
 
@@ -117,11 +118,24 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     float forward_cmd = sbus_pwm_to_float(inputs.rc_in[FORWARD_CHANNEL],-1.0f, 1.0f);
     float lateral_cmd = sbus_pwm_to_float(inputs.rc_in[LATERAL_CHANNEL],-1.0f, 1.0f);
 
-    float max_horizontal_magnitude = thrust_cmd * max_tan_angle;
-    float current_horizontal_magnitude = sqrtf(powf(forward_cmd, 2) + powf(lateral_cmd, 2));
-    if (current_horizontal_magnitude > max_horizontal_magnitude) {
-        if (current_horizontal_magnitude > 0.0f) {
-            float scale_factor = max_horizontal_magnitude / current_horizontal_magnitude;
+    // 2. --- INPUT SHAPING (Altitude Priority) ---
+    // Prioritize altitude control by budgeting thrust. The total thrust vector magnitude cannot exceed 1.0.
+    float vertical_thrust_component = thrust_cmd;
+
+    // Calculate the maximum available thrust for horizontal movement using pythagorean theorem.
+    // a^2 + b^2 = c^2  =>  b = sqrt(c^2 - a^2), where c is the max thrust of 1.0.
+    float max_horizontal_component = 0.0f;
+    if (1.0f > vertical_thrust_component) {
+        max_horizontal_component = sqrtf(1.0f - (vertical_thrust_component * vertical_thrust_component));
+    }
+
+    // Get the magnitude of the pilot's current horizontal request.
+    float requested_horizontal_magnitude = sqrtf(powf(forward_cmd, 2) + powf(lateral_cmd, 2));
+
+    // If the requested horizontal thrust exceeds the available budget, scale it back.
+    if (requested_horizontal_magnitude > max_horizontal_component) {
+        if (requested_horizontal_magnitude > 0.0f) {
+            float scale_factor = max_horizontal_component / requested_horizontal_magnitude;
             forward_cmd *= scale_factor;
             lateral_cmd *= scale_factor;
         }
@@ -170,7 +184,9 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     clip_vectors_for_saturation(base_throttles, &vector_pitch_out, &vector_roll_out, state.pitch_saturated, state.roll_saturated);
 
     float thrust_factor = 1.0f / (cosf(target_pitch_rad) * cosf(target_roll_rad));
-    thrust_factor = constrain_float(thrust_factor, 1.0f, 1.5f);
+    // This constraint must correspond to the MAX_TARGET_ANGLE_DEG.
+    // 1/cos(60 deg) = 2.0. This prevents extreme values if an unsafe angle is ever commanded.
+    thrust_factor = constrain_float(thrust_factor, 1.0f, 2.0f);
 
     // 7. --- ENCODE OUTPUTS ---
 #if PER_POD_SCALING
