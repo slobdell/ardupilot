@@ -32,14 +32,10 @@ const TVC_Config tvc_config = {
     .i_max_roll_rate  = 500.0
 };
 
-// --- SBUS Channel Mapping ---
-const int THRUST_CHANNEL  = 6; // Channel 7
-const int FORWARD_CHANNEL = 7; // Channel 8
-const int LATERAL_CHANNEL = 8; // Channel 9
-
 // Corresponds to a thrust_factor limit of 2.0 (1/cos(60)).
 const float MAX_TARGET_ANGLE_DEG = 60.0f;
 const float MAX_SAFE_ANGLE_RAD = MAX_TARGET_ANGLE_DEG * (M_PI / 180.0);
+const float MAX_THRUST_FACTOR = 1.0f / cosf(MAX_SAFE_ANGLE_RAD);
 const float max_tan_angle = tanf(MAX_TARGET_ANGLE_DEG * M_PI / 180.0);
 
 // =============================================================================
@@ -69,16 +65,9 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     
     // 1. --- FAILSAFE CHECKS ---
     if (!inputs.ahrs_healthy) {
-#if PER_POD_SCALING
-        for (int i = 0; i < NUM_PODS * 2; i++) {
-            outputs.sbus_outputs[i] = float_to_sbus_pwm(0.0f, -1.0f, 1.0f);
-        }
-        outputs.sbus_outputs[12] = float_to_sbus_pwm(1.0f, 1.0f, 1.5f);
-#else
-        outputs.sbus_outputs[0] = float_to_sbus_pwm(0.0f, -1.0f, 1.0f);
-        outputs.sbus_outputs[1] = float_to_sbus_pwm(0.0f, -1.0f, 1.0f);
-        outputs.sbus_outputs[2] = float_to_sbus_pwm(1.0f, 1.0f, 1.5f);
-#endif
+        outputs.sbus_outputs[TVC_SBUS_OUT_PITCH_CH] = float_to_sbus_pwm(0.0f, -1.0f, 1.0f);
+        outputs.sbus_outputs[TVC_SBUS_OUT_ROLL_CH] = float_to_sbus_pwm(0.0f, -1.0f, 1.0f);
+        outputs.sbus_outputs[TVC_SBUS_OUT_MULTI_THRUST_FACTOR_CH] = float_to_sbus_pwm(1.0f, 1.0f, MAX_THRUST_FACTOR);
         return outputs;
     }
 
@@ -91,24 +80,12 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     }
 
     if (inputs.in_failsafe || all_motors_commanded_off) {
-#if PER_POD_SCALING
-        for (int i = 0; i < NUM_PODS * 2; i++) {
-            outputs.sbus_outputs[i] = float_to_sbus_pwm(0.0f, -1.0f, 1.0f);
-        }
-        outputs.sbus_outputs[12] = float_to_sbus_pwm(1.0f, 1.0f, 1.5f);
-#else
-        outputs.sbus_outputs[0] = float_to_sbus_pwm(0.0f, -1.0f, 1.0f);
-        outputs.sbus_outputs[1] = float_to_sbus_pwm(0.0f, -1.0f, 1.0f);
-        outputs.sbus_outputs[2] = float_to_sbus_pwm(1.0f, 1.0f, 1.5f);
-#endif
+        outputs.sbus_outputs[TVC_SBUS_OUT_PITCH_CH] = float_to_sbus_pwm(0.0f, -1.0f, 1.0f);
+        outputs.sbus_outputs[TVC_SBUS_OUT_ROLL_CH] = float_to_sbus_pwm(0.0f, -1.0f, 1.0f);
+        outputs.sbus_outputs[TVC_SBUS_OUT_MULTI_THRUST_FACTOR_CH] = float_to_sbus_pwm(1.0f, 1.0f, MAX_THRUST_FACTOR);
         state.pitch_angle_pid.reset();
         state.roll_angle_pid.reset();
         state.pitch_rate_pid.reset();
-        state.roll_rate_pid.reset();
-        state.target_pitch_rate_filter.filterIn(0);
-        state.target_roll_rate_filter.filterIn(0);
-        return outputs;
-    }
 
     // 2. --- DE-INTERPOLATE INPUTS ---
     float thrust_cmd  = sbus_pwm_to_float(inputs.rc_in[THRUST_CHANNEL],  0.0f, 1.0f);
@@ -215,14 +192,60 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     float vector_roll_out  = state.roll_rate_pid.update(inputs.now_us, current_roll_rate_dps, target_roll_rate, state.roll_saturated);
 
     // 6. --- SATURATION & THRUST COMPENSATION ---
+#if VTOL_MODE == true
+    // --- NEW: VTOL Servo Saturation Logic ---
+    // In VTOL mode, the PID output is a direct servo command.
+    // We clip it to a normalized range (e.g., -1.0 to 1.0) that the SFC
+    // will map to the servo's PWM range.
+
+    // Store the original command to check for saturation.
+    float original_pitch_out = vector_pitch_out;
+    float original_roll_out = vector_roll_out;
+
+    // Constrain the output to the valid normalized range.
+    vector_pitch_out = constrain_float(vector_pitch_out, -1.0f, 1.0f);
+    vector_roll_out = constrain_float(vector_roll_out, -1.0f, 1.0f);
+
+    // Update the saturation flags. Saturation now means the servo is being
+    // commanded to its physical limit. This is still important feedback for the PID's anti-windup.
+    state.pitch_saturated = (fabsf(original_pitch_out - vector_pitch_out) > 1e-6);
+    state.roll_saturated = (fabsf(original_roll_out - vector_roll_out) > 1e-6);
+
+#else
+    // --- ORIGINAL: Multicopter Saturation Logic ---
     clip_vectors_for_saturation(base_throttles, &vector_pitch_out, &vector_roll_out, state.pitch_saturated, state.roll_saturated);
+#endif
 
     float thrust_factor = 1.0f / (cosf(target_pitch_rad) * cosf(target_roll_rad));
     // This constraint must correspond to the MAX_TARGET_ANGLE_DEG.
     // 1/cos(60 deg) = 2.0. This prevents extreme values if an unsafe angle is ever commanded.
-    thrust_factor = constrain_float(thrust_factor, 1.0f, 2.0f);
+    thrust_factor = constrain_float(thrust_factor, 1.0f, MAX_THRUST_FACTOR);
+
+#if VTOL_MODE == true
+    // --- VTOL ANGLE BLENDING LOGIC ---
+    float transition_progress = sbus_pwm_to_float(inputs.rc_in[TRANSITION_PROGRESS_CHANNEL], 0.0f, 1.0f);
+    
+    // Model A: Hover Control Output (already calculated by PIDs as vector_pitch_out)
+    float hover_model_pitch_output = vector_pitch_out;
+    float hover_model_roll_output = vector_roll_out;
+
+    // Model B: Forward Flight Control (Fixed Angle Command)
+    const float FORWARD_FLIGHT_TILT_COMMAND = 1.0f; // Represents max forward tilt
+    float fw_model_pitch_output = FORWARD_FLIGHT_TILT_COMMAND;
+    float fw_model_roll_output = 0.0f; // No roll command in forward flight from TVC
+
+    // Linearly interpolate between the two model outputs.
+    vector_pitch_out = (1.0f - transition_progress) * hover_model_pitch_output + transition_progress * fw_model_pitch_output;
+    vector_roll_out  = (1.0f - transition_progress) * hover_model_roll_output  + transition_progress * fw_model_roll_output;
+#endif
 
     // 7. --- ENCODE OUTPUTS ---
+#if VTOL_MODE == true
+    // Broadcast blended angles and raw hover factor
+    outputs.sbus_outputs[TVC_SBUS_OUT_PITCH_CH] = float_to_sbus_pwm(vector_pitch_out, -1.0f, 1.0f);
+    outputs.sbus_outputs[TVC_SBUS_OUT_ROLL_CH] = float_to_sbus_pwm(vector_roll_out, -1.0f, 1.0f);
+    outputs.sbus_outputs[TVC_SBUS_OUT_HOVER_THRUST_FACTOR_CH] = float_to_sbus_pwm(thrust_factor, 1.0f, MAX_THRUST_FACTOR);
+#else
 #if PER_POD_SCALING
     float average_throttle = 0.0f;
     for (int i = 0; i < NUM_PODS; i++) {
@@ -240,11 +263,12 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
         outputs.sbus_outputs[i * 2] = float_to_sbus_pwm(scaled_pitch, -1.0f, 1.0f);
         outputs.sbus_outputs[i * 2 + 1] = float_to_sbus_pwm(scaled_roll, -1.0f, 1.0f);
     }
-    outputs.sbus_outputs[12] = float_to_sbus_pwm(thrust_factor, 1.0f, 1.5f);
+    outputs.sbus_outputs[TVC_SBUS_OUT_HOVER_THRUST_FACTOR_CH] = float_to_sbus_pwm(thrust_factor, 1.0f, MAX_THRUST_FACTOR);
 #else
-    outputs.sbus_outputs[0] = float_to_sbus_pwm(vector_pitch_out, -1.0f, 1.0f);
-    outputs.sbus_outputs[1] = float_to_sbus_pwm(vector_roll_out, -1.0f, 1.0f);
-    outputs.sbus_outputs[2] = float_to_sbus_pwm(thrust_factor, 1.0f, 1.5f);
+    outputs.sbus_outputs[TVC_SBUS_OUT_PITCH_CH] = float_to_sbus_pwm(vector_pitch_out, -1.0f, 1.0f);
+    outputs.sbus_outputs[TVC_SBUS_OUT_ROLL_CH] = float_to_sbus_pwm(vector_roll_out, -1.0f, 1.0f);
+    outputs.sbus_outputs[TVC_SBUS_OUT_MULTI_THRUST_FACTOR_CH] = float_to_sbus_pwm(thrust_factor, 1.0f, MAX_THRUST_FACTOR);
+#endif
 #endif
 
     // 8. --- POPULATE DEBUG DATA ---
@@ -266,9 +290,9 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     // 10. --- BROADCAST HEALTH STATUS ---
     // Use channel 16 (index 15) to signal health to the SFCs.
     if (inputs.ahrs_healthy) {
-        outputs.sbus_outputs[15] = SBUS_MAX_PWM; // Healthy signal
+        outputs.sbus_outputs[TVC_SBUS_OUT_HEALTH_CH] = SBUS_MAX_PWM; // Healthy signal
     } else {
-        outputs.sbus_outputs[15] = SBUS_MIN_PWM; // Unhealthy signal
+        outputs.sbus_outputs[TVC_SBUS_OUT_HEALTH_CH] = SBUS_MIN_PWM; // Unhealthy signal
     }
 
     return outputs;

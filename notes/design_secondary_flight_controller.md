@@ -66,19 +66,20 @@ The SFC receives all commands as raw integer values over two SBUS buses. These v
 The main `loop()` executes the following sequence continuously:
 
 1. **Data Reception:** Reads the latest data packets from both SBUS buses.  
-2. **Safety & Failsafe Checks:**  
+2. **Pre-Flight Gatekeeper:** It checks for a "healthy" signal from the TVC on a dedicated health channel. If this signal has not been received at least once since boot, it stops the motors, centers the servos, and halts further execution for that loop cycle. This prevents any actuation until the TVC confirms it is ready.
+3. **Safety & Failsafe Checks:**  
    * It first performs the **"All Motors Off"** check by iterating through the first 6 channels of SBUS Bus A. If all are below the `MOTOR_OFF_THRESHOLD` (300), it stops the motors and halts further execution for that loop cycle.  
    * It then checks the `failsafe` flag from Bus A. If the signal from the PFC is lost, it stops the motors and halts.  
    * It then checks the `failsafe` flag from Bus B. If the signal from the TVC is lost, it resets all vectoring commands to a safe, neutral state (`pitch=0`, `roll=0`, `factor=1.0`) and continues, allowing the aircraft to fly as a standard hexacopter.  
-3. **Mixing Logic:**  
+4. **Mixing Logic:**  
    * It applies the `thrust_compensation_factor` to the `base_throttle` to calculate the `compensated_throttle`.  
    * It applies the `vector_pitch` and `vector_roll` commands as a differential to the `compensated_throttle` to calculate the final linear thrust for each of the 4 motors.  
-4. **Output Processing (Per-Motor):**  
+5. **Output Processing (Per-Motor):**  
    * The final linear thrust for each motor is **clamped** to a range of 0.0 to 1.0 to prevent saturation.  
    * The clamped value is then passed through a **low-pass filter** to smooth the output signal.  
    * The filtered, linear value is passed to the `thrust_to_dshot()` function, which applies the non-linear **thrust curve** to get the final DShot integer value (48-2047).  
    * This final DShot value is sent to the corresponding motor.  
-5. **Periodic Logging:** Every `LOG_PERIOD` (2000ms), the unit prints a status line to the serial monitor containing key state variables and the calculated average loop frequency (Hz).
+6. **Periodic Logging:** Every `LOG_PERIOD` (2000ms), the unit prints a status line to the serial monitor containing key state variables and the calculated average loop frequency (Hz).
 
 ---
 

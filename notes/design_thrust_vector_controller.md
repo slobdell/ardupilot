@@ -49,9 +49,9 @@ The firmware is configured via a set of constants defined at the top of the sket
 The main loop executes the following sequence continuously:
 
 1. DATA RECEPTION: Reads the latest data packet from SBUS Bus A.  
-2. SAFETY & FAILSAFE CHECKS: Checks if the PFC has commanded all 6 motors to be off (values \< 300). If so, it resets all PIDs and filters, sends neutral commands on Bus B, and waits. It continues to call `read_imu()` during this inactive state to keep the attitude filter "warm". If the `failsafe` flag from Bus A is active, it performs the same reset and wait routine.  
+2. SAFETY & FAILSAFE CHECKS: Checks if the PFC has commanded all 6 motors to be off (values < 300). If so, it resets all PIDs and filters, sends neutral commands on Bus B, and waits. It continues to call `read_imu()` during this inactive state to keep the attitude filter "warm". If the `failsafe` flag from Bus A is active, it performs the same reset and wait routine.  
 3. INPUT PROCESSING: De-interpolates all 9 command channels from SBUS A into their respective floating-point variables.  
-4. INPUT SHAPING: Constrains the `forward_cmd` and `lateral_cmd` using trigonometry to ensure the commanded target angle does not exceed the `MAX_SAFE_ANGLE_DEG`.  
+4. INPUT SHAPING (ALTITUDE PRIORITY): It prioritizes altitude control by budgeting thrust. The logic calculates the maximum available thrust for horizontal movement after accounting for the pilot's vertical thrust command. If the pilot's combined `forward` and `lateral` commands exceed this budget, they are scaled back proportionally to ensure the total commanded thrust vector does not exceed 1.0, preventing altitude loss during aggressive maneuvers.
 5. GAIN SCHEDULING: Calculates the 3D vector magnitude of the pilot's command and uses this value to linearly interpolate the P, I, and D gains for the two inner "rate" PID controllers for the current loop cycle.  
 6. IMU & STATE UPDATE: Calls `read_imu()` to get the latest `current_pitch`, `current_roll`, and their rates from the sensor and Madgwick filter.  
 7. CASCADED PID CONTROL: Calculates the `target_pitch_deg` and `target_roll_deg` using `atan2` trigonometry. These are fed into the outer "angle" PID loops. The output of these loops (a target angular rate) is then filtered before being fed as the setpoint to the inner "rate" PID loops.  

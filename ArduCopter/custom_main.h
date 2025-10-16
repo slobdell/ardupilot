@@ -174,4 +174,27 @@ static const int BAUD = 115200;
 static const int SERIAL_NUM = 4;
 static const uint32_t LOG_PERIOD = 2000; // milliseconds
 
-const int NUM_PODS = 6;
+// --- Number of motor pods (for SBUS input and output) ---
+#define NUM_PODS 6
+
+// --- MASTER FEATURE FLAGS ---
+#define VTOL_MODE true // Set to true for VTOL (tilt-rotor) mode, false for 6DOF multicopter.
+
+// --- SBUS Channel Mapping (from PFC) ---
+const int THRUST_CHANNEL  = 6; // Channel 7
+const int FORWARD_CHANNEL = 7; // Channel 8
+const int LATERAL_CHANNEL = 8; // Channel 9
+
+#if VTOL_MODE == true
+    const int TRANSITION_PROGRESS_CHANNEL = 10; // SBUS Ch 11
+    const int PLANE_THROTTLE_CHANNEL      = 11; // SBUS Ch 12
+#endif
+
+// --- TVC SBUS Output Channel Mapping (Bus B: TVC -> SFCs) ---
+const int TVC_SBUS_OUT_PITCH_CH           = 0;
+const int TVC_SBUS_OUT_ROLL_CH            = 1;
+const int TVC_SBUS_OUT_MULTI_THRUST_FACTOR_CH = 2; // For original multicopter mode
+const int TVC_SBUS_OUT_HOVER_THRUST_FACTOR_CH = 12; // For VTOL hover model
+const int TVC_SBUS_OUT_HEALTH_CH          = 15;
+
+// --- PID Tuning Mode ---
