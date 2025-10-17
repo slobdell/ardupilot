@@ -32,12 +32,6 @@ const TVC_Config tvc_config = {
     .i_max_roll_rate  = 500.0
 };
 
-// Corresponds to a thrust_factor limit of 2.0 (1/cos(60)).
-const float MAX_TARGET_ANGLE_DEG = 60.0f;
-const float MAX_SAFE_ANGLE_RAD = MAX_TARGET_ANGLE_DEG * (M_PI / 180.0);
-const float MAX_THRUST_FACTOR = 1.0f / cosf(MAX_SAFE_ANGLE_RAD);
-const float max_tan_angle = tanf(MAX_TARGET_ANGLE_DEG * M_PI / 180.0);
-
 // =============================================================================
 // --- HELPER PROTOTYPES (Internal to this file) ---
 // =============================================================================
@@ -63,13 +57,15 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
 {
     TVC_Outputs outputs;
     
-    // 1. --- FAILSAFE CHECKS ---
+#if !OPEN_LOOP_SERVO_MODE
+    // 1. --- FAILSAFE CHECKS (Closed-Loop Only) ---
     if (!inputs.ahrs_healthy) {
         outputs.sbus_outputs[TVC_SBUS_OUT_PITCH_CH] = float_to_sbus_pwm(0.0f, -1.0f, 1.0f);
         outputs.sbus_outputs[TVC_SBUS_OUT_ROLL_CH] = float_to_sbus_pwm(0.0f, -1.0f, 1.0f);
         outputs.sbus_outputs[TVC_SBUS_OUT_MULTI_THRUST_FACTOR_CH] = float_to_sbus_pwm(1.0f, 1.0f, MAX_THRUST_FACTOR);
         return outputs;
     }
+#endif
 
     bool all_motors_commanded_off = true;
     for (int i = 0; i < NUM_PODS; i++) {
@@ -86,6 +82,8 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
         state.pitch_angle_pid.reset();
         state.roll_angle_pid.reset();
         state.pitch_rate_pid.reset();
+        return outputs;
+    }
 
     // 2. --- DE-INTERPOLATE INPUTS ---
     float thrust_cmd  = sbus_pwm_to_float(inputs.rc_in[THRUST_CHANNEL],  0.0f, 1.0f);
@@ -115,10 +113,12 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
         }
     }
 
+#if VTOL_MODE == false
     float base_throttles[NUM_PODS];
     for(int i=0; i<NUM_PODS; ++i) {
         base_throttles[i] = sbus_pwm_to_float(inputs.rc_in[i], 0.0f, 1.0f);
     }
+#endif
   
     // 3. --- GAIN SCHEDULING (y = mx + c from two points) ---
     float vector_magnitude = sqrtf(powf(thrust_cmd, 2) + powf(forward_cmd, 2) + powf(lateral_cmd, 2));
@@ -170,11 +170,13 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
 #endif // !PID_TUNING_MODE
 
     // 4. --- GET STATE & CALCULATE TARGETS ---
+#if !OPEN_LOOP_SERVO_MODE
     float current_roll_deg = degrees(inputs.roll_rad);
     float current_pitch_deg = degrees(inputs.pitch_rad);
     
     float current_roll_rate_dps = degrees(inputs.gyro.x);
     float current_pitch_rate_dps = degrees(inputs.gyro.y);
+#endif
 
     float target_pitch_rad = atan2f(forward_cmd, thrust_cmd);
     float target_pitch_deg = degrees(target_pitch_rad);
@@ -183,6 +185,7 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     float target_roll_deg = degrees(target_roll_rad);
 
     // 5. --- RUN PID CONTROLLERS ---
+#if !OPEN_LOOP_SERVO_MODE
     float target_pitch_rate = state.pitch_angle_pid.update(inputs.now_us, current_pitch_deg, target_pitch_deg, state.pitch_saturated);
     float target_roll_rate = state.roll_angle_pid.update(inputs.now_us, current_roll_deg, target_roll_deg, state.roll_saturated);
     target_pitch_rate = state.target_pitch_rate_filter.filterIn(target_pitch_rate);
@@ -190,6 +193,24 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
 
     float vector_pitch_out = state.pitch_rate_pid.update(inputs.now_us, current_pitch_rate_dps, target_pitch_rate, state.pitch_saturated);
     float vector_roll_out  = state.roll_rate_pid.update(inputs.now_us, current_roll_rate_dps, target_roll_rate, state.roll_saturated);
+#else
+    // --- NEW: OPEN LOOP MODE (Piecewise Normalization) ---
+    // Normalize the target physical angle into a -1.0 to 1.0 command.
+    // This uses a piecewise function to correctly handle asymmetric ranges.
+    float vector_pitch_out;
+    if (target_pitch_deg >= 0) {
+        vector_pitch_out = target_pitch_deg / FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG;
+    } else {
+        vector_pitch_out = target_pitch_deg / fabsf(REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG);
+    }
+
+    float vector_roll_out;
+    if (target_roll_deg >= 0) {
+        vector_roll_out = target_roll_deg / FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG;
+    } else {
+        vector_roll_out = target_roll_deg / fabsf(REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG);
+    }
+#endif
 
     // 6. --- SATURATION & THRUST COMPENSATION ---
 #if VTOL_MODE == true
@@ -230,8 +251,8 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     float hover_model_roll_output = vector_roll_out;
 
     // Model B: Forward Flight Control (Fixed Angle Command)
-    const float FORWARD_FLIGHT_TILT_COMMAND = 1.0f; // Represents max forward tilt
-    float fw_model_pitch_output = FORWARD_FLIGHT_TILT_COMMAND;
+    // This command represents the maximum physical forward tilt.
+    float fw_model_pitch_output = FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG / FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG; // Should be 1.0f
     float fw_model_roll_output = 0.0f; // No roll command in forward flight from TVC
 
     // Linearly interpolate between the two model outputs.
@@ -297,7 +318,6 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
 
     return outputs;
 }
-
 
 // =============================================================================
 // --- HELPER IMPLEMENTATIONS (No HAL Dependencies) ---

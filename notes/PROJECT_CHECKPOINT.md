@@ -175,3 +175,81 @@ This testing process successfully identified and led to the correction of a crit
 This checkpoint marks the successful validation of the core TVC algorithm. The logic is now considered stable, correct, and ready for the next phase of testing.
 
 The immediate next step is to compile the validated firmware and perform a comprehensive bench test (hardware-in-the-loop) to ensure the "humble object" layer is correctly integrating the pure logic with the ArduPilot HAL.
+
+---
+
+# Project Checkpoint: SFC Firmware Refinements
+
+This section documents significant architectural improvements to the Secondary Flight Controller (SFC) firmware, enhancing its flexibility, safety, and testability.
+
+## 11. Configurable Servo Remapping
+
+A critical feature was added to allow the generic, normalized servo commands from the TVC (`-1.0` to `1.0`) to be remapped to a specific physical mechanical range on the SFC.
+
+-   **Implementation:** The `SFC_Config` struct was extended with `servo_min_angle_deg` and `servo_max_angle_deg` arrays. The core logic now performs a two-stage mapping:
+    1.  It translates the normalized TVC command into a target physical angle (e.g., 45 degrees).
+    2.  It then calculates the precise servo PWM signal required to move the actuator to that physical angle.
+-   **Benefit:** This provides a powerful abstraction layer. It allows for easy configuration of different mechanical linkages and servo orientations (including inverted directions) directly in the SFC's configuration without requiring any changes to the central TVC logic.
+
+## 12. Decoupled Servo and Motor Arming Logic
+
+A significant safety and usability improvement was made by decoupling the arming logic for servos and motors.
+
+-   **Problem:** The previous implementation treated the "motors off" (disarmed) state identically to a critical PFC failsafe, which incorrectly neutralized all servo outputs.
+-   **Solution:** The logic now correctly distinguishes between a true **PFC failsafe** (which still neutralizes all actuators) and a standard **disarmed state**. In a disarmed state, motor outputs are now correctly forced to a DShot command of `0`, while the servo control logic proceeds normally.
+-   **Benefit:** This allows for safe pre-flight checks, ground-based testing of servo-driven mechanisms (like VTOL tilts), and actuator movement without needing to spin the motors.
+
+## 13. Hardened Test Suite
+
+The SFC's standalone unit test suite was significantly improved to validate the new features and fix several latent bugs in the tests themselves.
+
+-   **New Coverage:** A dedicated test case (`test_servo_remapping_logic`) was added to validate the servo remapping feature for both normal and inverted mechanical ranges.
+-   **Bug Fixes:** Multiple incorrect assumptions in the existing tests were corrected, particularly around:
+    -   The behavior of low-pass filters during single-cycle test runs.
+    -   The correct expected DShot output for a disarmed motor (`0`, not `48` or `147`).
+    -   The expected behavior of servos during a "motors off" state.
+-   **Benefit:** The test suite is now more robust, reliable, and accurately reflects the firmware's intended behavior, making it a more effective tool for preventing future regressions.
+
+---
+
+# Project Checkpoint: Refined TVC/SFC Control Abstraction for VTOL
+
+This section documents the final, robust architecture for communication between the TVC and SFC, specifically designed to handle the complexities of a servo-driven VTOL with an asymmetric mechanical range.
+
+## 14. The Problem: Ambiguous Commands and Broken Abstractions
+
+The previous control model had a critical flaw: the normalized `-1.0` to `1.0` command sent from the TVC was ambiguous. Its physical meaning depended on the flight mode (hover vs. forward flight) and was based on internal TVC limits, not the true physical capabilities of the airframe. This created a brittle system where a change in the TVC's hover stability limit could unintentionally affect the SFC's behavior, and achieving the true mechanical maximum for forward flight was not explicitly possible.
+
+## 15. The Solution: A "Three-Point Contract" via Piecewise Interpolation
+
+The system was refactored to use a clean, unambiguous control abstraction based on a "Three-Point Contract." This ensures that the TVC (the "Brain") issues generic, physically meaningful commands, and the SFC (the "Muscle") performs the hardware-specific execution.
+
+### 15.1. The TVC's Responsibility: Piecewise Normalization
+
+The TVC's role is to decide on a **target physical angle** and then normalize it into a generic `-1.0` to `1.0` command. To handle asymmetric ranges (e.g., -10° to +93°), it uses a **piecewise normalization**:
+
+-   **Configuration:** The TVC is configured with the system's true physical envelope: `FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG` (e.g., 93.0) and `REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG` (e.g., -10.0).
+-   **Logic:**
+    -   If the calculated `target_physical_angle` is positive, it is normalized by the forward limit: `command = target_angle / 93.0`.
+    -   If the `target_physical_angle` is negative, it is normalized by the absolute value of the reverse limit: `command = target_angle / 10.0`.
+-   **Result:** A `0.0` command from the TVC always means "0 degrees physical". A `1.0` command always means "go to the maximum forward physical angle". A `-1.0` command always means "go to the maximum reverse physical angle".
+
+### 15.2. The SFC's Responsibility: Piecewise De-Normalization
+
+The SFC's role is to receive the TVC's unambiguous command and translate it into a hardware-specific PWM signal. It uses a corresponding **piecewise de-normalization**:
+
+-   **Configuration:** The SFC is configured with the **measured mechanical limits** of its specific servo: `servo_min_angle_deg` (e.g., -10.0) and `servo_max_angle_deg` (e.g., 93.0).
+-   **Logic:**
+    -   If the incoming command is positive (0.0 to 1.0), it interpolates between its neutral position (0°) and its configured `servo_max_angle_deg`.
+    -   If the incoming command is negative (-1.0 to 0.0), it interpolates between its `servo_min_angle_deg` and its neutral position (0°).
+-   **Result:** The SFC correctly translates the TVC's intent into the precise physical motion required, correctly handling asymmetric and even inverted mechanical setups.
+
+### 15.3. Use Case: QuadPlane Hover vs. Forward Flight
+
+This new architecture elegantly handles the different requirements of VTOL flight modes:
+
+-   **In Hover (Q-Modes):** The TVC's PID controllers are active. When the pilot commands a forward tilt, the TVC calculates a target angle. This angle is **clamped** by the `HOVER_MAX_PITCH_COMMAND_DEG` (e.g., 60°) for stability. The TVC then normalizes this clamped angle (e.g., `60.0 / 93.0 = 0.645`) and sends it to the SFC. The SFC receives `0.645` and correctly commands the servo to the **60° physical position**. The system respects the stability limit.
+
+-   **In Forward Flight (FW-Modes):** When the transition is complete (`transition_progress = 1.0`), the TVC's blending logic commands the system to its maximum physical forward angle, `FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG` (93°). It normalizes this (`93.0 / 93.0 = 1.0`) and sends `1.0` to the SFC. The SFC receives `1.0` and commands the servo to its configured `servo_max_angle_deg`, achieving the **93° physical position** for efficient cruise.
+
+This clean separation of concerns ensures the system is robust, configurable, and behaves predictably across all flight phases, while also providing a correct saturation feedback mechanism to the TVC's internal PID controllers.

@@ -2,6 +2,7 @@
 
 #include <stdint.h> // For uint32_t etc.
 #include <algorithm> // For std::min/max
+#include <cmath> // For M_PI
 
 // SBUS PWM Value Ranges used by helper functions
 const int SBUS_MIN_PWM = 1000;
@@ -124,6 +125,22 @@ struct TVC_Outputs {
 };
 
 // State structure: All data that must persist between loops
+const float MAX_TARGET_ANGLE_DEG = 60.0f;
+const float MAX_SAFE_ANGLE_RAD = MAX_TARGET_ANGLE_DEG * (M_PI / 180.0);
+const float MAX_THRUST_FACTOR = 1.0f / cosf(MAX_SAFE_ANGLE_RAD);
+const float max_tan_angle = tanf(MAX_TARGET_ANGLE_DEG * M_PI / 180.0);
+
+// NEW: Physical angle limits for the system's full range of motion.
+// These define the maximum positive and negative physical tilt angles the system is designed to achieve.
+const float FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG = 93.0f; // Example: Max forward tilt for cruise
+const float REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG = -10.0f; // Example: Max reverse tilt
+
+// =============================================================================
+// --- HELPER PROTOTYPES (Internal to this file) ---
+// =============================================================================
+int float_to_sbus_pwm(float float_val, float min_float, float max_float);
+
+
 struct TVC_State {
     LinearPIDController& pitch_rate_pid;
     LinearPIDController& roll_rate_pid;
@@ -178,7 +195,8 @@ static const uint32_t LOG_PERIOD = 2000; // milliseconds
 #define NUM_PODS 6
 
 // --- MASTER FEATURE FLAGS ---
-#define VTOL_MODE true // Set to true for VTOL (tilt-rotor) mode, false for 6DOF multicopter.
+#define VTOL_MODE false // Set to true for VTOL (tilt-rotor) mode, false for 6DOF multicopter.
+#define OPEN_LOOP_SERVO_MODE false // NEW: Bypasses IMU/PIDs for direct servo control.
 
 // --- SBUS Channel Mapping (from PFC) ---
 const int THRUST_CHANNEL  = 6; // Channel 7

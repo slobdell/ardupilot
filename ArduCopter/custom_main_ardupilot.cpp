@@ -68,11 +68,14 @@ void newMain()
 
     // 1. --- GATHER INPUTS from HAL ---
     TVC_Inputs inputs;
-    inputs.ahrs_healthy = AP::ahrs().healthy();
     inputs.in_failsafe = rc().in_rc_failsafe();
     for (int i = 0; i < 16; i++) {
         inputs.rc_in[i] = RC_Channels::get_radio_in(i);
     }
+
+#if !OPEN_LOOP_SERVO_MODE
+    // In closed-loop mode, read the real sensor data.
+    inputs.ahrs_healthy = AP::ahrs().healthy();
     AP::vehicle()->get_osd_roll_pitch_rad(inputs.roll_rad, inputs.pitch_rad);
     
     // Convert ArduPilot Vector3f to our platform-independent TVC_Vector3f
@@ -80,6 +83,13 @@ void newMain()
     inputs.gyro.x = gyro_ap.x;
     inputs.gyro.y = gyro_ap.y;
     inputs.gyro.z = gyro_ap.z;
+#else
+    // In open-loop mode, bypass all sensor reads and report a healthy state.
+    inputs.ahrs_healthy = true;
+    inputs.roll_rad = 0.0f;
+    inputs.pitch_rad = 0.0f;
+    inputs.gyro = {0.0f, 0.0f, 0.0f};
+#endif
     
     inputs.now_us = AP_HAL::micros();
 
