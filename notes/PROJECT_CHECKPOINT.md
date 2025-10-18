@@ -253,3 +253,63 @@ This new architecture elegantly handles the different requirements of VTOL fligh
 -   **In Forward Flight (FW-Modes):** When the transition is complete (`transition_progress = 1.0`), the TVC's blending logic commands the system to its maximum physical forward angle, `FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG` (93°). It normalizes this (`93.0 / 93.0 = 1.0`) and sends `1.0` to the SFC. The SFC receives `1.0` and commands the servo to its configured `servo_max_angle_deg`, achieving the **93° physical position** for efficient cruise.
 
 This clean separation of concerns ensures the system is robust, configurable, and behaves predictably across all flight phases, while also providing a correct saturation feedback mechanism to the TVC's internal PID controllers.
+
+---
+
+# Project Checkpoint: VTOL Motor Mixing Architecture & ArduPilot Integration
+
+This section provides a detailed explanation of the final, validated motor mixing architecture for the tilt-rotor VTOL. It is written to provide deep context for future configuration of the ArduPilot PFC, ensuring that critical safety inferences can be drawn.
+
+## 16. The Core Challenge: Harmonizing with ArduPilot's QuadPlane Logic
+
+A standard ArduPilot QuadPlane performs a **cross-fade** during the transition from hover to forward flight. Over the period defined by `Q_TRANSITION_MS`, it fades out the influence of its multicopter attitude controller and fades in the influence of its fixed-wing attitude controller.
+
+Our distributed architecture (PFC-TVC-SFC) must work in harmony with this existing, battle-tested logic, not fight against it. Early designs that involved re-blending the already-blended outputs from ArduPilot ("double blending") or simply summing the outputs were identified as flawed and unsafe, as they would lead to a non-linear loss of thrust or motor saturation.
+
+## 17. The Final Architecture: The "SFC Cross-Fade Model"
+
+The final, correct architecture is a "State-Driven Model" where the SFC is the single, authoritative blender for motor thrust.
+
+-   **PFC (ArduPilot) Role: Raw State Broadcaster**
+    -   The PFC is configured as a standard QuadPlane (e.g., tricopter). It is **not modified**.
+    -   It broadcasts the raw, unblended outputs of its two internal "brains":
+        1.  `pfc_base_throttle`: The output from the **multicopter controller**. This value naturally decreases as the wings generate lift, but it is *not* artificially faded by ArduPilot's transition logic before being broadcast.
+        2.  `plane_throttle_cmd`: The output from the **fixed-wing controller**.
+        3.  `transition_progress`: The master "knob" (`0.0` to `1.0`) indicating the state of the transition.
+
+-   **TVC Role: Angle-Only Authority**
+    -   The TVC's sole responsibility in the final architecture is to manage the **servo angles**. It reads `transition_progress` and smoothly blends the servo angle from its hover position to its fixed forward-flight position. It does not participate in motor thrust calculations.
+
+-   **SFC Role: The Authoritative Blender**
+    -   The SFC receives the raw ingredients from the PFC and the `hover_thrust_factor` from the TVC. It performs the **one and only blend** in the system.
+    -   **Step 1: Calculate Hover Model:** It calculates the thrust required for pure hover, including our custom compensation: `hover_model_thrust = pfc_base_throttle * hover_thrust_factor`.
+    -   **Step 2: Identify Plane Model:** It identifies the thrust required for pure forward flight: `plane_model_thrust = plane_throttle_cmd`.
+    -   **Step 3: Perform Cross-Fade:** It uses `transition_progress` to perform a weighted average:
+        `final_thrust = (1.0 - transition_progress) * hover_model_thrust + transition_progress * plane_model_thrust;`
+    -   This `final_thrust` is the definitive value sent to the motors.
+
+## 18. Critical Inferences for ArduPilot Configuration
+
+Understanding this architecture is essential for safely configuring the ArduPilot PFC. A future AI or human configurator must draw the following inferences:
+
+### 18.1. Inference: `Q_ASSIST_SPEED` Must Be Disabled
+
+-   **Reasoning:** The `Q_ASSIST_SPEED` feature is a safety net that abruptly re-activates the pure **multicopter attitude controller** if airspeed drops too low during forward flight.
+-   **The Violated Assumption:** ArduPilot's multicopter controller assumes that an increase in motor thrust produces **vertical lift**.
+-   **The Danger:** In our tilt-rotor, the motors are tilted forward. An increase in thrust produces **forward propulsion**. If the multicopter controller attempts to correct a roll by increasing thrust on one side, it will instead induce a powerful, uncommanded **yawing moment**. This cross-coupling will lead to a loss of control.
+-   **Conclusion:** The fundamental assumptions of the `Q_ASSIST` feature are violated by the tilt-rotor mechanism. It is not just unnecessary; it is dangerous.
+-   **Action:** The parameter `Q_ASSIST_SPEED` **must be set to 0** to disable this feature.
+
+### 18.2. Inference: ArduPilot Motor Mixer Must Be Simple
+
+-   **Reasoning:** Our custom TVC/SFC logic handles all the complexities of tilting, blending, and thrust compensation. The PFC's only job is to provide the raw stabilization outputs for a simple, non-tilting airframe.
+-   **Conclusion:** The PFC should not be configured with a complex tilt-rotor motor mixer within ArduPilot. It should be configured as a basic `FRAME_CLASS: Tricopter`. ArduPilot will then think it is controlling a simple tricopter, and our downstream logic will correctly interpret its outputs for our more complex airframe.
+-   **Action:** Set `FRAME_CLASS` to `1` (Tricopter) or the equivalent for the desired motor count. Do not use any of ArduPilot's built-in tilt-rotor servo outputs for the main tilting mechanism.
+
+### 18.3. Inference: PFC Outputs are Abstract Targets, Not Direct Hardware Commands
+
+-   **Reasoning:** The PFC's motor outputs (e.g., `SERVO1_FUNCTION`, `SERVO2_FUNCTION`) do not directly map to the physical motors on the aircraft. They map to the SBUS channels that our SFCs are listening on.
+-   **Conclusion:** The PFC is not directly controlling hardware; it is broadcasting state information. The person configuring the PFC must understand that setting `SERVO1_FUNCTION` to `Motor1` is not about controlling a specific ESC, but about placing the blended throttle value for the front-left flight position onto SBUS channel 1.
+-   **Action:** The ArduPilot output functions must be mapped to the first `N` servo outputs (e.g., `Motor1`, `Motor2`, `Motor3` for a tricopter). The `SERIAL1_PROTOCOL` must be set to `30` (SBUS Output) to ensure these values are broadcast correctly.
+
+This detailed context ensures that the system can be configured safely, respecting the clean separation of concerns between ArduPilot's flight dynamics and our custom actuation logic.
