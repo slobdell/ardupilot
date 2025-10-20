@@ -6,6 +6,10 @@
 #include <AP_HAL/AP_HAL.h>
 #include "custom_config.h"
 
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+#error "ENABLE_TRICOPTER_VTOL_BACKEND can only be used with ArduPlane builds"
+#endif
+
 /*****************************************************************************
 *   The init_ardupilot function processes everything we need for an in - air restart
 *        We will determine later if we are actually on the ground and process a

@@ -52,6 +52,12 @@ public:
 
     bool set_reversed(int motor_number, bool reversed);
 
+    // set vtol state from quadplane
+    void set_vtol_state(float transition_progress, int16_t plane_throttle) {
+        _vtol_transition_progress = transition_progress;
+        _vtol_plane_throttle = plane_throttle;
+    }
+
     // var_info for holding Parameter information
     static const struct AP_Param::GroupInfo        var_info[];
 
@@ -65,6 +71,10 @@ protected:
     void output_armed_stabilizing() override;
     void output_armed_stabilizing_vectored();
     void output_armed_stabilizing_vectored_6dof();
+
+    // vtol state
+    float _vtol_transition_progress;
+    int16_t _vtol_plane_throttle;
 
     // Parameters
     AP_Int8             _motor_reverse[AP_MOTORS_MAX_NUM_MOTORS];

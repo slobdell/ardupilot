@@ -125,5 +125,9 @@ protected:
 
     bool in_forced_transition;
 
+public:
+    // current mix between VTOL and fixed wing, 1.0 for full VTOL, 0 for full fixed wing
+    float transition_mix;
+
 };
 

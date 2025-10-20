@@ -22,6 +22,10 @@
 #include "AP_Motors6DOF.h"
 #include <GCS_MAVLink/GCS.h>
 
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+#include <../ArduPlane/quadplane.h>
+#endif
+
 #include "../../ArduCopter/custom_config.h"
 
 // --- RC-to-SBUS Pass-through Channel Definitions for In-Flight PID Tuning ---
@@ -31,8 +35,23 @@
 #define RC_INPUT_TUNING_VALUE_CHAN 13
 // The motor output channel (0-indexed) to broadcast the selector switch value on.
 #define SBUS_OUTPUT_TUNING_SELECTOR_CHAN 12
-// The motor output channel (0-indexed) to broadcast the value knob on.
+// The SBUS output channel (0-indexed) to broadcast the value knob on.
 #define SBUS_OUTPUT_TUNING_VALUE_CHAN 13
+
+// convert PWM to a float in the range -1 to 1
+static float pwm_to_thrust_float(int16_t pwm)
+{
+    return (pwm - 1500) / 500.0f;
+}
+
+// --- VTOL State SBUS Channel Definitions ---
+// The SBUS output channel (0-indexed) to broadcast the VTOL transition progress on.
+#define SBUS_OUTPUT_TRANSITION_PROGRESS_CHAN 10 // Corresponds to SBUS Channel 11
+#define SBUS_OUTPUT_PLANE_THROTTLE_CHAN 11      // Corresponds to SBUS Channel 12
+
+// --- Tricopter VTOL Configuration ---
+// Amplification factor for the rear motor's pitch authority.
+#define TRICOPTER_REAR_PITCH_AMPLIFICATION 1.01f
 
 uint32_t lastLogTime6 = 0;
 #define DEAD_BAND 0.05
@@ -167,6 +186,9 @@ bool AP_Motors6DOF::init(uint8_t expected_num_motors) {
     if (CATERPILLAR_H_FRAME_6DOF) {
       wantMotors = 9;
     }
+    if (ENABLE_TRICOPTER_VTOL_BACKEND) {
+      wantMotors = 5;
+    }
     uint8_t num_motors = 0;
     for(uint8_t i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
         if (motor_enabled[i]) {
@@ -187,6 +209,36 @@ bool AP_Motors6DOF::init(uint8_t expected_num_motors) {
 
 void AP_Motors6DOF::setup_motors(motor_frame_class frame_class, motor_frame_type frame_type)
 {
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    // --- Tricopter VTOL Motor Setup ---
+    _frame_class_string = "TRICOPTER_VTOL";
+
+    // Define factors for clarity based on ArduPilot conventions.
+    // Positive roll command is roll right -> right motors decrease thrust.
+    // Positive pitch command is pitch down -> front motors increase thrust.
+    const float rollRightFactor = -1.0f;
+    const float rollLeftFactor  =  1.0f;
+    const float pitchDownFactor =  1.0f; // Front motors get positive factor for pitch down
+    const float pitchUpFactor   = -1.0f; // Rear motor gets negative factor for pitch down
+    const float yawFactor       =  1.0f;
+    const float forwardFactor   =  1.0f;
+    const float motorThrottleFactor = 1.0f; // Main thrusting motors contribute 100% to throttle.
+    const float noInput         =  0.0f;
+
+    // Motor 1: Front-Right
+    add_motor_raw_6dof(AP_MOTORS_MOT_1,  rollRightFactor,  pitchDownFactor * 0.5f, noInput, motorThrottleFactor, noInput, noInput, 1);
+    // Motor 2: Front-Left
+    add_motor_raw_6dof(AP_MOTORS_MOT_2,  rollLeftFactor,   pitchDownFactor * 0.5f, noInput, motorThrottleFactor, noInput, noInput, 2);
+    // Motor 3: Rear
+    add_motor_raw_6dof(AP_MOTORS_MOT_3,  noInput,          pitchUpFactor * TRICOPTER_REAR_PITCH_AMPLIFICATION, noInput, motorThrottleFactor, noInput, noInput, 3);
+    // Motor 4: Yaw "Motor" (Tail Servo)
+    add_motor_raw_6dof(AP_MOTORS_MOT_4,  noInput,  noInput, yawFactor, 0.0f, noInput, noInput, 4);
+    // Motor 5: Forward "Motor" (Abstract Forward Thrust Command)
+    add_motor_raw_6dof(AP_MOTORS_MOT_5,  noInput,  noInput, noInput, 0.0f, forwardFactor, noInput, 5);
+    set_initialised_ok(true);
+    return;
+#endif
+
     set_initialised_ok(false);
     // remove existing motors
     for (int8_t i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) {
@@ -537,22 +589,32 @@ void AP_Motors6DOF::output_armed_stabilizing()
             float compensation_gain = 1.0;
             // thrust linearization accounted for on the end motor controller
             // units.
-            if(!CATERPILLAR_H_FRAME_6DOF) {
+            if(!CATERPILLAR_H_FRAME_6DOF && !ENABLE_TRICOPTER_VTOL_BACKEND) {
               compensation_gain = thr_lin.get_compensation_gain(); // compensation for battery voltage and altitude
             }
-            throttle_thrust = get_throttle() * compensation_gain;
-        }
-
-        // --- In-Flight PID Tuning Pass-through ---
-        #if CATERPILLAR_H_FRAME_6DOF
-            // Read the raw PWM from the pilot's RC inputs for the tuning channels
-            // and place them directly into the output array for SBUS broadcast.
-            _thrust_rpyt_out[SBUS_OUTPUT_TUNING_SELECTOR_CHAN] = pwm_to_thrust(hal.rcin->read(RC_INPUT_TUNING_SELECTOR_CHAN));
-            _thrust_rpyt_out[SBUS_OUTPUT_TUNING_VALUE_CHAN] = pwm_to_thrust(hal.rcin->read(RC_INPUT_TUNING_VALUE_CHAN));
-        #endif
-
-        forward_thrust = _forward_in;
-        lateral_thrust = _lateral_in;
+                        throttle_thrust = get_throttle() * compensation_gain;
+                    }
+            
+            #if ENABLE_TRICOPTER_VTOL_BACKEND
+                    // --- VTOL State Broadcasting ---
+                    // Scale the 0-1 progress to a 1000-2000us PWM value.
+                    uint16_t transition_pwm = 1000 + (uint16_t)(_vtol_transition_progress * 1000.0f);
+            
+                    // Place the state values into the SBUS output array on their designated channels.
+                    // Note: pwm_to_thrust is a simple inverse scaling from PWM to a -1 to 1 float.
+                    _thrust_rpyt_out[SBUS_OUTPUT_TRANSITION_PROGRESS_CHAN] = pwm_to_thrust_float(transition_pwm);
+                    _thrust_rpyt_out[SBUS_OUTPUT_PLANE_THROTTLE_CHAN] = pwm_to_thrust_float(_vtol_plane_throttle);
+            #endif
+            
+                    // --- In-Flight PID Tuning Pass-through ---
+                            #if CATERPILLAR_H_FRAME_6DOF
+                                // Read the raw PWM from the pilot's RC inputs for the tuning channels
+                                // and place them directly into the output array for SBUS broadcast.
+                                _thrust_rpyt_out[SBUS_OUTPUT_TUNING_SELECTOR_CHAN] = pwm_to_thrust_float(hal.rcin->read(RC_INPUT_TUNING_SELECTOR_CHAN));
+                                _thrust_rpyt_out[SBUS_OUTPUT_TUNING_VALUE_CHAN] = pwm_to_thrust_float(hal.rcin->read(RC_INPUT_TUNING_VALUE_CHAN));
+                            #endif
+                    
+                            forward_thrust = _forward_in;        lateral_thrust = _lateral_in;
 
         float rpy_out[AP_MOTORS_MAX_NUM_MOTORS]; // buffer so we don't have to multiply coefficients multiple times.
         float linear_out[AP_MOTORS_MAX_NUM_MOTORS]; // 3 linear DOF mix for each motor
@@ -618,7 +680,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
             if (motor_enabled[i]) {
                 float local_forward_thrust = forward_thrust;
                 float local_lateral_thrust = lateral_thrust;
-                if(!LATERAL_MOTORS_CONFIG4) {
+                if(!LATERAL_MOTORS_CONFIG4 && !ENABLE_TRICOPTER_VTOL_BACKEND) {
                     if(local_forward_thrust * _forward_factor[i] < 0) {
                         local_forward_thrust = 0;
                     }
@@ -787,7 +849,7 @@ void AP_Motors6DOF::output_armed_stabilizing_vectored_6dof()
         float compensation_gain = 1.0;
         // thrust linearization accounted for on the end motor controller
         // units.
-        if(!CATERPILLAR_H_FRAME_6DOF) {
+        if(!CATERPILLAR_H_FRAME_6DOF && !ENABLE_TRICOPTER_VTOL_BACKEND) {
           compensation_gain = thr_lin.get_compensation_gain(); // compensation for battery voltage and altitude
         }
         throttle_thrust = get_throttle() * compensation_gain;

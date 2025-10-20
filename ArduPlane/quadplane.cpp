@@ -2,6 +2,13 @@
 
 #if HAL_QUADPLANE_ENABLED
 
+#include <AP_Motors/AP_Motors6DOF.h>
+#include "../../ArduCopter/custom_config.h"
+
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+#include <AC_AttitudeControl/AC_AttitudeControl_Multi_6DoF.h>
+#endif
+
 #include "AC_AttitudeControl/AC_AttitudeControl_TS.h"
 
 const AP_Param::GroupInfo QuadPlane::var_info[] = {
@@ -727,6 +734,15 @@ bool QuadPlane::setup(void)
         AP_BoardConfig::config_error("set TAILSIT_ENABLE 0 or TILT_ENABLE 0");
     }
 
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    // force the motor and attitude control backend for the VTOL tricopter
+    motors = NEW_NOTHROW AP_Motors6DOF(rc_speed);
+    motors_var_info = AP_Motors6DOF::var_info;
+    ahrs_view = ahrs.create_view(ROTATION_NONE, ahrs_trim_pitch);
+    attitude_control = NEW_NOTHROW AC_AttitudeControl_Multi_6DoF(*ahrs_view, aparm, *motors);
+    attitude_control_var_info = AC_AttitudeControl_Multi_6DoF::var_info;
+    ((AC_AttitudeControl_Multi_6DoF*)attitude_control)->set_lateral_enable(false);
+#else
     switch ((AP_Motors::motor_frame_class)frame_class) {
     case AP_Motors::MOTOR_FRAME_TRI:
         motors = NEW_NOTHROW AP_MotorsTri(rc_speed);
@@ -766,6 +782,7 @@ bool QuadPlane::setup(void)
     if (!attitude_control) {
         AP_BoardConfig::allocation_error("attitude_control");
     }
+#endif
 
     AP_Param::load_object_from_eeprom(attitude_control, attitude_control->var_info);
     pos_control = NEW_NOTHROW AC_PosControl(*ahrs_view, inertial_nav, *motors, *attitude_control);
@@ -1741,6 +1758,13 @@ void QuadPlane::update(void)
     } else {
 
         assisted_flight = in_vtol_airbrake();
+
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+        // pass transition state to motors library
+        float transition_progress = 1.0f - ((SLT_Transition*)transition)->transition_mix;
+        int16_t plane_throttle_scaled = SRV_Channels::get_output_scaled(SRV_Channel::k_throttle);
+        ((AP_Motors6DOF*)motors)->set_vtol_state(transition_progress, plane_throttle_scaled);
+#endif
 
         // output to motors
         motors_output();

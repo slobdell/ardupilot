@@ -2,7 +2,7 @@
 #define CUSTOM_CONFIG_H
 
 // set this to true to run the custom control loop in ArduCopter/mode.cpp
-#define RUN_CUSTOM_LOOP true
+#define RUN_CUSTOM_LOOP false
 
 // this flag can be used generally
 #define FORCE_6DOF_ATTITUDE_CONTROLLER false
@@ -51,5 +51,8 @@
 // needs to be used in conjunction with WEATHERVANE_ENABLED. This will
 // force loiter mode to weathervane.
 #define CUSTOM_WEATHERVANE true
+
+// When true, the AP_MotorsTricopterVTOL class is used instead of the default.
+#define ENABLE_TRICOPTER_VTOL_BACKEND 1
 
 #endif // CUSTOM_CONFIG_H

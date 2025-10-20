@@ -161,7 +161,7 @@ MAV_RESULT Copter::mavlink_motor_test_start(const GCS_MAVLINK &gcs_chan, uint8_t
         if(LATERAL_MOTORS_CONFIG4) {
             motor_count = 8;
         }
-        if (CATERPILLAR_H_FRAME_6DOF) {
+        if (CATERPILLAR_H_FRAME_6DOF || ENABLE_TRICOPTER_VTOL_BACKEND) {
           // include motors as well as forward, lateral, and thrust.
           motor_count = 9;
         }

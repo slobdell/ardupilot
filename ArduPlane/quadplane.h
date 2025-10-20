@@ -210,6 +210,9 @@ private:
     const struct AP_Param::GroupInfo *motors_var_info;
 
     AC_AttitudeControl_Multi *attitude_control;
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    const struct AP_Param::GroupInfo *attitude_control_var_info;
+#endif
     AC_PosControl *pos_control;
     AC_WPNav *wp_nav;
     AC_Loiter *loiter_nav;

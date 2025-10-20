@@ -313,3 +313,16 @@ Understanding this architecture is essential for safely configuring the ArduPilo
 -   **Action:** The ArduPilot output functions must be mapped to the first `N` servo outputs (e.g., `Motor1`, `Motor2`, `Motor3` for a tricopter). The `SERIAL1_PROTOCOL` must be set to `30` (SBUS Output) to ensure these values are broadcast correctly.
 
 This detailed context ensures that the system can be configured safely, respecting the clean separation of concerns between ArduPilot's flight dynamics and our custom actuation logic.
+
+---
+
+# Known Issues
+
+## 19. Broken In-Flight PID Tuning for `CATERPILLAR_H_FRAME_6DOF`
+
+-   **Problem:** The in-flight PID tuning feature, which attempts to pass RC input values for tuning parameters via SBUS channels 12 and 13 (0-indexed), is currently non-functional for the `CATERPILLAR_H_FRAME_6DOF` configuration.
+-   **Root Cause:** The `AP_Motors6DOF` class writes the tuning channel values to the `_thrust_rpyt_out` array. However, the motor mixer for `CATERPILLAR_H_FRAME_6DOF` only enables 9 motors (indices 0-8). Since no "dummy" motors are enabled for indices 12 and 13, the `output_to_motors()` function (which iterates through `motor_enabled` flags) ignores these outputs, and the tuning values are never broadcast.
+-   **Impact:** Pilots cannot perform real-time, in-flight PID tuning using the designated RC channels for the Caterpillar H-frame.
+-   **Suggested Fix:** To resolve this, "dummy" motors need to be added for SBUS channels 12 and 13 in the `AP_Motors6DOF::setup_motors()` function when `CATERPILLAR_H_FRAME_6DOF` is active. This would involve:
+    1.  Updating the `wantMotors` count in `AP_Motors6DOF::init()` to include these additional channels (e.g., from 9 to 14).
+    2.  Adding `add_motor_raw_6dof()` calls for `AP_MOTORS_MOT_12` and `AP_MOTORS_MOT_13` with all roll, pitch, yaw, and throttle factors set to zero. This would enable the output channels without affecting the flight dynamics of the aircraft.
