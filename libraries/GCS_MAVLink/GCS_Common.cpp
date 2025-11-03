@@ -1664,6 +1664,12 @@ void GCS_MAVLINK::remove_message_from_bucket(int8_t bucket, ap_message id)
 
 bool GCS_MAVLINK::set_ap_message_interval(enum ap_message id, uint16_t interval_ms)
 {
+    // SBL SBL MAVLink hack to output at high frequency
+    // HACK: Force SERVO_OUTPUT_RAW on SERIAL4 (MAVLINK_COMM_4) to a 50Hz rate for diagnostics
+    if (id == MSG_SERVO_OUTPUT_RAW && chan == MAVLINK_COMM_4) {
+        interval_ms = 20;
+    }
+
     if (id == MSG_NEXT_PARAM) {
         // force parameters to *always* get streamed so a vehicle is
         // recoverable from bad configuration:
