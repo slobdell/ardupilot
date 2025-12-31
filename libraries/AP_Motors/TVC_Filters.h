@@ -26,7 +26,7 @@
 #pragma once
 
 #include <AP_HAL/AP_HAL.h>
-#include <AP_Motors/TVC/TVC_Filters_Defs.h>
+#include "TVC_Filters_Defs.h"
 
 using namespace IIR;
 

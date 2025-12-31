@@ -1,6 +1,6 @@
-#include <AP_Motors/TVC/TVC_Core.h>
-#include <AP_Motors/TVC/TVC_Filters.h>
-#include <AP_Motors/TVC/TVC_PID.h>
+#include "TVC_Core.h"
+#include "TVC_Filters.h"
+#include "TVC_PID.h"
 #include <cmath> // For sqrtf, powf, atan2f, cosf
 #include <algorithm> // For std::min
 

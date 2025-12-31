@@ -1,4 +1,4 @@
-#include <AP_Motors/TVC/TVC_PID.h>
+#include "TVC_PID.h"
 
 
 LinearPIDController::LinearPIDController(double _p, double _i, double _d, double _iMax){
