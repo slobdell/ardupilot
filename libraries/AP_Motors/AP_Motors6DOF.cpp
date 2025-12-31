@@ -580,7 +580,7 @@ void AP_Motors6DOF::output_to_motors()
                     }
                 } else {
                     if(i < 4) {
-                      if(LIFTING_MOTORS_REVERSIBLE || i == 3) {
+                      if(LIFTING_MOTORS_REVERSIBLE || i == BLIMP_MOT_YAW) {
                         motor_out[i] = MOT_SPIN_NEUTRAL;
                       } else {
                         motor_out[i] = MOT_SPIN_MIN;
@@ -659,9 +659,8 @@ void AP_Motors6DOF::output_to_motors()
                                                                                     motor_out[i] = 1500; 
                                                                                 }                                                } else {
                         // Standard logic for other motors
-                        // Force Yaw (Index 3) to be reversible.
-                        // Respect LIFTING_MOTORS_REVERSIBLE for Lift motors (Indices 0, 1, 2).
-                        bool is_reversible = (i == 3) ? true : LIFTING_MOTORS_REVERSIBLE;
+                        // Force Yaw to be reversible.
+                        bool is_reversible = (i == BLIMP_MOT_YAW) ? true : LIFTING_MOTORS_REVERSIBLE;
                         motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], is_reversible);
                     }
                 }

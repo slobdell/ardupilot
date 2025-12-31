@@ -137,6 +137,9 @@ const float max_tan_angle = tanf(MAX_TARGET_ANGLE_DEG * M_PI / 180.0);
 const float FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG = 180.0f; // Example: Max forward tilt for cruise
 const float REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG = -90.0f; // Example: Max reverse tilt
 
+// Deadband to prevent rapid 180 deg servo flips around the vertical thrust zero-point.
+const float VERTICAL_THROTTLE_DEADBAND = 0.05f;
+
 // =============================================================================
 // --- HELPER PROTOTYPES (Internal to this file) ---
 // =============================================================================

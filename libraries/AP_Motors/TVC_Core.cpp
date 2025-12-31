@@ -90,6 +90,13 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     float forward_cmd = sbus_pwm_to_float(inputs.rc_in[FORWARD_CHANNEL],-1.0f, 1.0f);
     float lateral_cmd = sbus_pwm_to_float(inputs.rc_in[LATERAL_CHANNEL],-1.0f, 1.0f);
 
+    // --- THROTTLE DEADBAND (Prevent Singularity Flip) ---
+    // Force tiny negative vertical thrust requests to 0.0 to prevent the servos from flipping 180 deg
+    // for negligible downward force.
+    if (thrust_cmd < 0.0f && thrust_cmd >= -VERTICAL_THROTTLE_DEADBAND) {
+        thrust_cmd = 0.0f;
+    }
+
     // 2. --- INPUT SHAPING (Altitude Priority) ---
     // Prioritize altitude control by budgeting thrust. The total thrust vector magnitude cannot exceed 1.0.
     float vertical_thrust_component = thrust_cmd;

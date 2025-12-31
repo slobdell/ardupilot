@@ -51,24 +51,26 @@ Upload the resulting `arduplane.apj` to your flight controller.
 
 The backend uses a specific hardcoded mixer. Wire your ESCs and Servos exactly as follows.
 
-### 3.1. Mixer Map (Conceptual vs. Physical)
+### 3.1. Mixer Map (MicoAir743 Specific)
 
-| Output | Blimp Function | Protocol | Description |
-| :--- | :--- | :--- | :--- |
-| **1** | **Right Lift** | DShot | Main Lift. (Non-Reversible) |
-| **2** | **Left Lift** | DShot | Main Lift. (Non-Reversible) |
-| **3** | **Tail Yaw** | **Bi-Dir DShot** | Yaw Control. Spins reverse for left yaw, forward for right yaw. |
-| **4** | **Rudder Servo** | PWM | Duplicate Yaw Control. Linked to tail motor logic. |
-| **5** | **Tilt Servos** | PWM | Controls vectoring angle. **Trim=Vertical**. |
-| **6** | **Debug Thrust** | DShot | **Debug Only.** Direct mapping of Forward Stick for bench testing. |
+| Output | Blimp Function | Protocol | Timer Group | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| **1** | **Right Lift** | DShot | TIM1 | Main Lift. |
+| **2** | **Left Lift** | DShot | TIM1 | Main Lift. |
+| **3** | **Tail Yaw** | **Bi-Dir DShot** | TIM1 | Yaw Control. Reversible. |
+| **4** | **Debug Thrust** | DShot | TIM1 | Manual Stick Debug. |
+| **5** | **Rudder Servo** | PWM | TIM3 | Yaw Duplicate. |
+| **6** | **Tilt Servos** | PWM | TIM3 | Vectoring. **Trim=Vertical**. |
 
-### 3.2. Detailed Wiring
+### 3.2. Detailed Wiring (MicoAir743)
 
-1.  **Lift ESCs (1 & 2):** Connect to FC Outputs 1 & 2. Standard DShot.
-2.  **Yaw ESC (3):** Connect to FC Output 3. **Bidirectional (3D) Mode.**
-3.  **Rudder Servo (4):** Connect to FC Output 4.
-4.  **Tilt Servos (5):** Connect to FC Output 5.
-5.  **Debug ESC (6):** Connect to FC Output 6.
+1.  **Lift ESCs (1 & 2):** Connect to Pins 1 & 2.
+2.  **Yaw ESC (3):** Connect to Pin 3. **MUST be configured for Bidirectional (3D) Mode.**
+3.  **Debug ESC (4):** Connect to Pin 4 (Optional).
+4.  **Rudder Servo (5):** Connect to Pin 5.
+5.  **Tilt Servos (6):** Connect to Pin 6.
+
+*Note: DShot and PWM are separated into Timer Groups TIM1 and TIM3 to prevent protocol conflicts.*
 
 ## 4. Theory of Operation & Control Logic
 
@@ -102,11 +104,13 @@ You must configure the `SERVO5` parameters to define the physical range of your 
 *   **Reversible:** The tail motor spins in reverse for one direction and forward for the other.
 
 ### 4.4. Automated Flight & Safety (Z-Controller)
-While the pilot has full access to -1.0 to +1.0 thrust (including emergency downward vectoring), the autopilot should generally only use gravity for descent.
-*   **Descent Priority:** To ensure the autopilot never "needs" to use active downward thrust, you must limit the commanded descent velocity to be less than the blimp's natural unpowered terminal velocity.
-*   **Requirement:**
-    *   Set `WPNAV_SPEED_DN` (Auto Mode) and `PILOT_SPEED_DN` (Loiter Mode) to a conservative value (e.g., **1.0 m/s** to **1.5 m/s**).
-    *   As long as gravity accelerates the blimp faster than this limit, the autopilot will keep the motors in the "Positive Lift" regime to govern the descent, never crossing the 0.0 threshold into "Active Down" vectoring.
+While the pilot has full access to -1.0 to +1.0 thrust (including emergency downward vectoring), the autopilot and Loiter modes should generally only use gravity for descent.
+*   **Descent Priority:** To ensure the system never "needs" to use active downward thrust automatically, you must limit the commanded descent velocity to be less than the blimp's natural unpowered terminal velocity.
+*   **Vertical Speed Requirements:**
+    *   `WPNAV_SPEED_DN` (Auto Mode Descent): Set to a conservative value (e.g., **100 cm/s**).
+    *   `PILOT_SPEED_DN` (Loiter Mode Descent): Set to a conservative value (e.g., **100 cm/s**).
+    *   `PILOT_SPEED_UP` (Loiter Mode Climb): Set to match your expected lift capability (e.g., **200 cm/s**).
+*   **Behavior:** As long as gravity accelerates the blimp faster than the `DN_SPEED` limit, the autopilot will keep the motors in the "Positive Lift" regime to govern the descent, never crossing the 0.0 threshold into "Active Down" vectoring.
 
 ### 4.5. Attitude Stabilization Logic
 *   **Roll & Pitch:** Active stabilization for Roll and Pitch is **DISABLED** in the mixer (factors set to 0.0).
@@ -144,16 +148,16 @@ Set these parameters in Mission Planner/QGC.
 ### 5.2. Motor & Servo Functions
 *   `SERVO1_FUNCTION`: **33** (Motor 1) -> Right Lift
 *   `SERVO2_FUNCTION`: **34** (Motor 2) -> Left Lift
-*   `SERVO4_FUNCTION`: **36** (Motor 4) -> Yaw Motor
-*   `SERVO5_FUNCTION`: **37** (Motor 5) -> Tilt Servo
-*   `SERVO6_FUNCTION`: **38** (Motor 6) -> Rudder Servo
-*   `SERVO7_FUNCTION`: **39** (Motor 7) -> Debug Forward
+*   `SERVO3_FUNCTION`: **36** (Motor 4) -> Yaw Motor
+*   `SERVO4_FUNCTION`: **39** (Motor 7) -> Debug Forward
+*   `SERVO5_FUNCTION`: **38** (Motor 6) -> Rudder Servo
+*   `SERVO6_FUNCTION`: **37** (Motor 5) -> Tilt Servo
 
 ### 5.3. ESC & DShot
-*   `MOT_PWM_TYPE`: **6** (DShot600) or **4** (DShot150).
-*   `SERVO_BLH_AUTO`: **1** (Enable BLHeli passthrough).
-*   `SERVO_BLH_MASK`: **11** (Enable for Chan 1, 2, 4). *Do not enable for Servos (5,6).*
-*   `SERVO_BLH_BDMASK`: **8** (Enable Bidirectional DShot for Chan 4 ONLY).
+*   `MOT_PWM_TYPE`: **6** (DShot600).
+*   `SERVO_BLH_AUTO`: **1**.
+*   `SERVO_BLH_MASK`: **15** (Enable for Chan 1, 2, 3, 4). *Pins 5,6 are PWM.*
+*   `SERVO_BLH_BDMASK`: **4** (Enable Bidirectional DShot for Chan 3 ONLY).
 
 ### 5.4. PID Tuning (Blimp Specifics)
 *   `Q_A_RAT_RLL_P`, `Q_A_RAT_PIT_P`, `Q_A_RAT_YAW_P`: **0.05** (Start very low).
