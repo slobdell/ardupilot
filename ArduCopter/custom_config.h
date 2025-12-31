@@ -59,4 +59,7 @@
 // instead of the standard Tricopter VTOL.
 #define TRICOPTER_IS_BLIMP true
 
+// Enable Emergency Manual Override switch (Channel 9 Low) to bypass TVC logic
+#define EMERGENCY_BLIMP_MANUAL_MODE true
+
 #endif // CUSTOM_CONFIG_H

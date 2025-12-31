@@ -65,6 +65,8 @@ static TVC_State tvc_state = {
 #define SBUS_OUTPUT_TUNING_SELECTOR_CHAN 12
 // The SBUS output channel (0-indexed) to broadcast the value knob on.
 #define SBUS_OUTPUT_TUNING_VALUE_CHAN 13
+// The RC input channel for Manual Override Switch (Channel 9 -> Index 8)
+#define RC_INPUT_MANUAL_OVERRIDE_CHAN 8
 
 // --- Blimp Motor Index Definitions (0-indexed) ---
 #define BLIMP_MOT_LIFT_RIGHT 0 // Motor 1
@@ -619,17 +621,26 @@ void AP_Motors6DOF::output_to_motors()
                                                     // Motor 5: Tilt Servo (SRV_Channel Interpolation)
                                                     SRV_Channel::Aux_servo_function_t func = SRV_Channels::get_motor_function(i);
                                                     const SRV_Channel *chan = SRV_Channels::get_channel_for(func);
-                                                                            if (chan != nullptr) {
-                                                                                float thrust = _tilt_angle;
-                                                                                int16_t pwm = chan->get_trim();
-                                                                                if (thrust >= 0) {
-                                                                                    pwm += (int16_t)(thrust * (chan->get_output_max() - chan->get_trim()));
-                                                                                }
-                                                                                else {
-                                                                                    pwm += (int16_t)(thrust * (chan->get_trim() - chan->get_output_min()));
-                                                                                }
-                                                                                motor_out[i] = constrain_int16(pwm, chan->get_output_min(), chan->get_output_max());
-                                                                            } else {                                                                                    // Fallback: If no channel assigned, output safe neutral (1500)
+                                                                                                                                if (chan != nullptr) {
+                                                                                                                                    float thrust = _tilt_angle;
+                                                                                                                                    int16_t pwm;
+                                                                                                                                    if (_manual_override_active) {
+                                                                                                                                        // Manual Mode: Linear Map Min->Max (Ignoring Trim)
+                                                                                                                                        // thrust -1..1 -> 0..1
+                                                                                                                                        float percent = (thrust + 1.0f) * 0.5f;
+                                                                                                                                        pwm = chan->get_output_min() + (uint16_t)(percent * (chan->get_output_max() - chan->get_output_min()));
+                                                                                                                                    } else {
+                                                                                                                                        // Auto/Stabilize: Trim-Centric Logic
+                                                                                                                                        pwm = chan->get_trim();
+                                                                                                                                        if (thrust >= 0) {
+                                                                                                                                            pwm += (int16_t)(thrust * (chan->get_output_max() - chan->get_trim()));
+                                                                                                                                        }
+                                                                                                                                        else {
+                                                                                                                                            pwm += (int16_t)(thrust * (chan->get_trim() - chan->get_output_min()));
+                                                                                                                                        }
+                                                                                                                                    }
+                                                                                                                                    motor_out[i] = constrain_int16(pwm, chan->get_output_min(), chan->get_output_max());
+                                                                                                                                } else {                                                                                    // Fallback: If no channel assigned, output safe neutral (1500)
                                                                                     motor_out[i] = 1500; 
                                                                                 }                                                } else if (i == BLIMP_MOT_YAW || i == BLIMP_MOT_RUDDER) {                                    // Motor 3: Yaw Motor, Motor 4: Rudder Servo (Reversible)
                                     motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], true);
@@ -741,7 +752,41 @@ void AP_Motors6DOF::output_armed_stabilizing()
                             forward_thrust = _forward_in;        lateral_thrust = _lateral_in;
 
             #if ENABLE_TRICOPTER_VTOL_BACKEND
-                    // --- TVC Integration ---
+                // Check for Manual Override Switch (RC9 < 1200)
+                if (hal.rcin->read(RC_INPUT_MANUAL_OVERRIDE_CHAN) < 1200) {
+                    _manual_override_active = true;
+
+                    // --- Manual Passthrough Logic ---
+                    // Throttle (RC3) -> Lift Motors (0-1)
+                    // Note: hal.rcin->read returns 1000-2000 roughly.
+                    float rc_throttle = (hal.rcin->read(2) - 1000) / 1000.0f;
+                    throttle_thrust = constrain_float(rc_throttle, 0.0f, 1.0f);
+
+                    // Pitch (RC2) -> Tilt Servo (-1 to 1)
+                    // 1000 -> -1 (Back), 1500 -> 0 (Vertical), 2000 -> 1 (Forward/Down)
+                    float rc_pitch = (hal.rcin->read(1) - 1500) / 500.0f;
+                    _tilt_angle = constrain_float(rc_pitch, -1.0f, 1.0f);
+                    forward_thrust = _tilt_angle; // For debug motor
+
+                    // Yaw (RC4) -> Yaw/Rudder (-1 to 1) with Deadband
+                    float rc_yaw = (hal.rcin->read(3) - 1500) / 500.0f;
+                    if (fabsf(rc_yaw) < 0.05f) {
+                        rc_yaw = 0.0f;
+                    }
+                    yaw_thrust = constrain_float(rc_yaw, -1.0f, 1.0f);
+                    
+                    // Zero out others
+                    roll_thrust = 0.0f;
+                    lateral_thrust = 0.0f;
+
+                    if (TRICOPTER_IS_BLIMP) {
+                         _thrust_rpyt_out[BLIMP_MOT_DEBUG] = forward_thrust;
+                    }
+
+                } else {
+                    _manual_override_active = false;
+                    
+                    // --- TVC Integration (Standard Logic) ---
                     TVC_Inputs tvc_inputs;
                     tvc_inputs.now_us = AP_HAL::micros();
                     tvc_inputs.ahrs_healthy = true;
@@ -792,6 +837,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     // Place the state values into the SBUS output array on their designated channels.
                     _thrust_rpyt_out[SBUS_OUTPUT_TRANSITION_PROGRESS_CHAN] = pwm_to_thrust_float(transition_pwm);
                     _thrust_rpyt_out[SBUS_OUTPUT_PLANE_THROTTLE_CHAN] = pwm_to_thrust_float(_vtol_plane_throttle);
+                }
             #endif
 
         float rpy_out[AP_MOTORS_MAX_NUM_MOTORS]; // buffer so we don't have to multiply coefficients multiple times.
