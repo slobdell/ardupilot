@@ -257,7 +257,6 @@ void AP_Motors6DOF::setup_motors(motor_frame_class frame_class, motor_frame_type
     const float pitchDownFactor =  1.0f; // Front motors get positive factor for pitch down
     const float pitchUpFactor   = -1.0f; // Rear motor gets negative factor for pitch down
     const float yawFactor       =  1.0f;
-    const float forwardFactor   =  1.0f;
     const float motorThrottleFactor = 1.0f; // Main thrusting motors contribute 100% to throttle.
     const float noInput         =  0.0f;
 
@@ -600,18 +599,17 @@ void AP_Motors6DOF::output_to_motors()
                                                     // Motor 5: Tilt Servo (SRV_Channel Interpolation)
                                                     SRV_Channel::Aux_servo_function_t func = SRV_Channels::get_motor_function(i);
                                                     const SRV_Channel *chan = SRV_Channels::get_channel_for(func);
-                                                    if (chan != nullptr) {
-                                                        float thrust = _tilt_angle;
-                                                        int16_t pwm = chan->get_trim();
-                                                        if (thrust >= 0) {
-                                                            pwm += (int16_t)(thrust * (chan->get_max() - chan->get_trim()));
-                                                        }
-                                                        else {
-                                                            pwm += (int16_t)(thrust * (chan->get_trim() - chan->get_min()));
-                                                        }
-                                                                                    motor_out[i] = constrain_int16(pwm, chan->get_min(), chan->get_max());
-                                                                                } else {
-                                                                                    // Fallback: If no channel assigned, output safe neutral (1500)
+                                                                            if (chan != nullptr) {
+                                                                                float thrust = _tilt_angle;
+                                                                                int16_t pwm = chan->get_trim();
+                                                                                if (thrust >= 0) {
+                                                                                    pwm += (int16_t)(thrust * (chan->get_output_max() - chan->get_trim()));
+                                                                                }
+                                                                                else {
+                                                                                    pwm += (int16_t)(thrust * (chan->get_trim() - chan->get_output_min()));
+                                                                                }
+                                                                                motor_out[i] = constrain_int16(pwm, chan->get_output_min(), chan->get_output_max());
+                                                                            } else {                                                                                    // Fallback: If no channel assigned, output safe neutral (1500)
                                                                                     motor_out[i] = 1500; 
                                                                                 }                                                } else if (i == BLIMP_MOT_YAW || i == BLIMP_MOT_RUDDER) {                                    // Motor 3: Yaw Motor, Motor 4: Rudder Servo (Reversible)
                                     motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], true);
@@ -625,20 +623,19 @@ void AP_Motors6DOF::output_to_motors()
                                             } else {
                                                 // Standard Tricopter VTOL Logic
                                                 // Special handling for Tilt Servo (Motor 5 / Index 4)
-                                                if (i == 4) {
-                                                    SRV_Channel::Aux_servo_function_t func = SRV_Channels::get_motor_function(i);
-                                                    const SRV_Channel *chan = SRV_Channels::get_channel_for(func);
-                                                    if (chan != nullptr) {
-                                                        float thrust = _tilt_angle;
-                                                        int16_t pwm = chan->get_trim();
-                                                        if (thrust >= 0) {
-                                                            pwm += (int16_t)(thrust * (chan->get_max() - chan->get_trim()));
-                                                        } else {
-                                                            pwm += (int16_t)(thrust * (chan->get_trim() - chan->get_min()));
-                                                        }
-                                                                                    motor_out[i] = constrain_int16(pwm, chan->get_min(), chan->get_max());
-                                                                                } else {
-                                                                                    // Fallback: If no channel assigned, output safe neutral (1500)
+                                                                    if (i == 4) {
+                                                                        SRV_Channel::Aux_servo_function_t func = SRV_Channels::get_motor_function(i);
+                                                                        const SRV_Channel *chan = SRV_Channels::get_channel_for(func);
+                                                                        if (chan != nullptr) {
+                                                                            float thrust = _tilt_angle;
+                                                                            int16_t pwm = chan->get_trim();
+                                                                            if (thrust >= 0) {
+                                                                                pwm += (int16_t)(thrust * (chan->get_output_max() - chan->get_trim()));
+                                                                            } else {
+                                                                                pwm += (int16_t)(thrust * (chan->get_trim() - chan->get_output_min()));
+                                                                            }
+                                                                            motor_out[i] = constrain_int16(pwm, chan->get_output_min(), chan->get_output_max());
+                                                                        } else {                                                                                    // Fallback: If no channel assigned, output safe neutral (1500)
                                                                                     motor_out[i] = 1500; 
                                                                                 }                                                } else {
                         // Standard logic for other motors
