@@ -16,7 +16,8 @@ public:
     bool init(uint8_t expected_num_motors) override;
 
     AP_Motors6DOF(uint16_t speed_hz = AP_MOTORS_SPEED_DEFAULT) :
-        AP_MotorsMatrix(speed_hz) {
+        AP_MotorsMatrix(speed_hz),
+        _tilt_angle(0.0f) {
         AP_Param::setup_object_defaults(this, var_info);
     };
 
@@ -82,6 +83,9 @@ protected:
 
     float               _forward_factor[AP_MOTORS_MAX_NUM_MOTORS]; // each motors contribution to forward/backward
     float               _lateral_factor[AP_MOTORS_MAX_NUM_MOTORS];  // each motors contribution to lateral (left/right)
+    float               _tilt_factor[AP_MOTORS_MAX_NUM_MOTORS];     // each motors contribution to tilt angle (servo)
+    
+    float               _tilt_angle; // The calculated tilt angle (-1 to 1)
 
     // current limiting
     float _output_limited = 1.0f;

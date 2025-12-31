@@ -55,4 +55,8 @@
 // When true, the AP_MotorsTricopterVTOL class is used instead of the default.
 #define ENABLE_TRICOPTER_VTOL_BACKEND 1
 
+// Set to true to configure the backend for the Blimp (2 Lift, 1 Tail Motor, 1 Rudder Servo)
+// instead of the standard Tricopter VTOL.
+#define TRICOPTER_IS_BLIMP true
+
 #endif // CUSTOM_CONFIG_H

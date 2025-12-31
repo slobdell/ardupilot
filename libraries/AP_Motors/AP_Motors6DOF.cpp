@@ -27,6 +27,34 @@
 #endif
 
 #include "../../ArduCopter/custom_config.h"
+#include "TVC/TVC_Core.h"
+#include "TVC/TVC_PID.h"
+#include "TVC/TVC_Filters.h"
+#include <SRV_Channel/SRV_Channel.h>
+#include <AP_AHRS/AP_AHRS.h>
+
+// --- TVC Static State ---
+#define TVC_GYRO_HZ 400
+#define TVC_SAMPLE_TIME (1.0 / (double)TVC_GYRO_HZ)
+#define TVC_IMU_CUTOFF_FREQUENCY 20.0
+
+static LinearPIDController pitch_rate_pid(0,0,0,0);
+static LinearPIDController roll_rate_pid(0,0,0,0);
+static LinearPIDController pitch_angle_pid(tvc_config.pitch_angle.p, tvc_config.pitch_angle.i, tvc_config.pitch_angle.d, tvc_config.i_max_angle);
+static LinearPIDController roll_angle_pid(tvc_config.roll_angle.p, tvc_config.roll_angle.i, tvc_config.roll_angle.d, tvc_config.i_max_angle);
+static CustomFilter target_pitch_rate_filter(TVC_IMU_CUTOFF_FREQUENCY, TVC_SAMPLE_TIME, IIR::ORDER::OD2, IIR::TYPE::LOWPASS);
+static CustomFilter target_roll_rate_filter(TVC_IMU_CUTOFF_FREQUENCY, TVC_SAMPLE_TIME, IIR::ORDER::OD2, IIR::TYPE::LOWPASS);
+
+static TVC_State tvc_state = {
+    pitch_rate_pid,
+    roll_rate_pid,
+    pitch_angle_pid,
+    roll_angle_pid,
+    target_pitch_rate_filter,
+    target_roll_rate_filter,
+    false,
+    false
+};
 
 // --- RC-to-SBUS Pass-through Channel Definitions for In-Flight PID Tuning ---
 // The RC input channel (0-indexed) from the pilot's receiver for the gain selector switch.
@@ -37,6 +65,14 @@
 #define SBUS_OUTPUT_TUNING_SELECTOR_CHAN 12
 // The SBUS output channel (0-indexed) to broadcast the value knob on.
 #define SBUS_OUTPUT_TUNING_VALUE_CHAN 13
+
+// --- Blimp Motor Index Definitions (0-indexed) ---
+#define BLIMP_MOT_LIFT_RIGHT 0 // Motor 1
+#define BLIMP_MOT_LIFT_LEFT  1 // Motor 2
+#define BLIMP_MOT_YAW        2 // Motor 3 (Tail Motor)
+#define BLIMP_MOT_RUDDER     3 // Motor 4 (Rudder Servo)
+#define BLIMP_MOT_TILT       4 // Motor 5 (Tilt Servo)
+#define BLIMP_MOT_DEBUG      5 // Motor 6 (Debug Thrust)
 
 // convert PWM to a float in the range -1 to 1
 static float pwm_to_thrust_float(int16_t pwm)
@@ -187,7 +223,7 @@ bool AP_Motors6DOF::init(uint8_t expected_num_motors) {
       wantMotors = 9;
     }
     if (ENABLE_TRICOPTER_VTOL_BACKEND) {
-      wantMotors = 5;
+      wantMotors = TRICOPTER_IS_BLIMP ? 6 : 5;
     }
     uint8_t num_motors = 0;
     for(uint8_t i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
@@ -225,16 +261,39 @@ void AP_Motors6DOF::setup_motors(motor_frame_class frame_class, motor_frame_type
     const float motorThrottleFactor = 1.0f; // Main thrusting motors contribute 100% to throttle.
     const float noInput         =  0.0f;
 
-    // Motor 1: Front-Right
-    add_motor_raw_6dof(AP_MOTORS_MOT_1,  rollRightFactor,  pitchDownFactor * 0.5f, noInput, motorThrottleFactor, noInput, noInput, 1);
-    // Motor 2: Front-Left
-    add_motor_raw_6dof(AP_MOTORS_MOT_2,  rollLeftFactor,   pitchDownFactor * 0.5f, noInput, motorThrottleFactor, noInput, noInput, 2);
-    // Motor 3: Rear
-    add_motor_raw_6dof(AP_MOTORS_MOT_3,  noInput,          pitchUpFactor * TRICOPTER_REAR_PITCH_AMPLIFICATION, noInput, motorThrottleFactor, noInput, noInput, 3);
-    // Motor 4: Yaw "Motor" (Tail Servo)
-    add_motor_raw_6dof(AP_MOTORS_MOT_4,  noInput,  noInput, yawFactor, 0.0f, noInput, noInput, 4);
-    // Motor 5: Forward "Motor" (Abstract Forward Thrust Command)
-    add_motor_raw_6dof(AP_MOTORS_MOT_5,  noInput,  noInput, noInput, 0.0f, forwardFactor, noInput, 5);
+    if (TRICOPTER_IS_BLIMP) {
+        // --- BLIMP CONFIGURATION ---
+        // Motor 1: Right Gondola Lift (DShot)
+        // No Roll or Pitch stabilization - rely on inherent buoyancy stability.
+        add_motor_raw_6dof(AP_MOTORS_MOT_1,  noInput,  noInput, noInput, motorThrottleFactor, noInput, noInput, 1);
+        // Motor 2: Left Gondola Lift (DShot)
+        add_motor_raw_6dof(AP_MOTORS_MOT_2,  noInput,  noInput, noInput, motorThrottleFactor, noInput, noInput, 2);
+        
+        // Motor 3: Tail Yaw Motor (Bidirectional DShot)
+        add_motor_raw_6dof(AP_MOTORS_MOT_3,  noInput,  noInput, yawFactor, 0.0f, noInput, noInput, 3);
+        
+        // Motor 4: Rudder Servo (PWM) - Duplicate of Yaw
+        add_motor_raw_6dof(AP_MOTORS_MOT_4,  noInput,  noInput, yawFactor, 0.0f, noInput, noInput, 4);
+        
+        // Motor 5: Tilt Servos (PWM) - Driven by TVC Angle (Hardcoded to _tilt_angle)
+        add_motor_raw_6dof(AP_MOTORS_MOT_5,  noInput,  noInput, noInput, 0.0f, noInput, noInput, 5);
+        
+        // Motor 6: Forward Thrust Debug (DShot) - Driven manually in output_armed
+        add_motor_raw_6dof(AP_MOTORS_MOT_6,  noInput,  noInput, noInput, 0.0f, noInput, noInput, 6);
+
+    } else {
+        // --- STANDARD TRICOPTER CONFIGURATION ---
+        // Motor 1: Front-Right
+        add_motor_raw_6dof(AP_MOTORS_MOT_1,  rollRightFactor,  pitchDownFactor * 0.5f, noInput, motorThrottleFactor, noInput, noInput, 1);
+        // Motor 2: Front-Left
+        add_motor_raw_6dof(AP_MOTORS_MOT_2,  rollLeftFactor,   pitchDownFactor * 0.5f, noInput, motorThrottleFactor, noInput, noInput, 2);
+        // Motor 3: Rear
+        add_motor_raw_6dof(AP_MOTORS_MOT_3,  noInput,          pitchUpFactor * TRICOPTER_REAR_PITCH_AMPLIFICATION, noInput, motorThrottleFactor, noInput, noInput, 3);
+        // Motor 4: Yaw "Motor" (Tail Servo)
+        add_motor_raw_6dof(AP_MOTORS_MOT_4,  noInput,  noInput, yawFactor, 0.0f, noInput, noInput, 4);
+        // Motor 5: Forward "Motor" (Abstract Forward Thrust Command) - Driven by _tilt_angle
+        add_motor_raw_6dof(AP_MOTORS_MOT_5,  noInput,  noInput, noInput, 0.0f, noInput, noInput, 5);
+    }
     set_initialised_ok(true);
     return;
 #endif
@@ -485,11 +544,33 @@ void AP_Motors6DOF::output_to_motors()
 
     switch (_spool_state) {
     case SpoolState::SHUT_DOWN:
+    case SpoolState::GROUND_IDLE:
         // sends minimum values out to the motors
         // set motor output based on thrust requests
         for (i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) {
             // SBL redundant code
             if (motor_enabled[i]) {
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+                if (TRICOPTER_IS_BLIMP) {
+                    if (i == BLIMP_MOT_RUDDER || i == BLIMP_MOT_TILT) { // Servos
+                        motor_out[i] = MOT_SPIN_NEUTRAL;
+                    } else if (i == BLIMP_MOT_YAW) { // Reversible Tail Motor
+                        motor_out[i] = MOT_SPIN_NEUTRAL;
+                    } else { // Lift (1,2) and Debug (6)
+                        motor_out[i] = MOT_SPIN_MIN;
+                    }
+                } else {
+                    if(i < 4) {
+                      if(LIFTING_MOTORS_REVERSIBLE || i == 3) {
+                        motor_out[i] = MOT_SPIN_NEUTRAL;
+                      } else {
+                        motor_out[i] = MOT_SPIN_MIN;
+                      }
+                    } else {
+                      motor_out[i] = MOT_SPIN_NEUTRAL; // Tilt servo
+                    }
+                }
+#else
                 if(i < 4) {
                   if(LIFTING_MOTORS_REVERSIBLE) {
                     motor_out[i] = MOT_SPIN_NEUTRAL;
@@ -503,27 +584,7 @@ void AP_Motors6DOF::output_to_motors()
                     motor_out[i] = MOT_SPIN_MIN;
                   }
                 }
-            }
-        }
-        break;
-    case SpoolState::GROUND_IDLE:
-        // sends output to motors when armed but not flying
-        for (i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) {
-            // SBL redundant code
-            if (motor_enabled[i]) {
-                if(i < 4) {
-                  if(LIFTING_MOTORS_REVERSIBLE) {
-                    motor_out[i] = MOT_SPIN_NEUTRAL;
-                  } else {
-                    motor_out[i] = MOT_SPIN_MIN;
-                  }
-                } else {
-                  if(LATERAL_MOTORS_CONFIG4) {
-                    motor_out[i] = MOT_SPIN_NEUTRAL;
-                  } else {
-                    motor_out[i] = MOT_SPIN_MIN;
-                  }
-                }
+#endif
             }
         }
         break;
@@ -532,12 +593,68 @@ void AP_Motors6DOF::output_to_motors()
     case SpoolState::SPOOLING_DOWN:
         // set motor output based on thrust requests
         for (i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) {
-            if (motor_enabled[i]) {
+                        if (motor_enabled[i]) {
+            #if ENABLE_TRICOPTER_VTOL_BACKEND
+                                            if (TRICOPTER_IS_BLIMP) {
+                                                if (i == BLIMP_MOT_TILT) { 
+                                                    // Motor 5: Tilt Servo (SRV_Channel Interpolation)
+                                                    SRV_Channel::Aux_servo_function_t func = SRV_Channels::get_motor_function(i);
+                                                    const SRV_Channel *chan = SRV_Channels::get_channel_for(func);
+                                                    if (chan != nullptr) {
+                                                        float thrust = _tilt_angle;
+                                                        int16_t pwm = chan->get_trim();
+                                                        if (thrust >= 0) {
+                                                            pwm += (int16_t)(thrust * (chan->get_max() - chan->get_trim()));
+                                                        }
+                                                        else {
+                                                            pwm += (int16_t)(thrust * (chan->get_trim() - chan->get_min()));
+                                                        }
+                                                                                    motor_out[i] = constrain_int16(pwm, chan->get_min(), chan->get_max());
+                                                                                } else {
+                                                                                    // Fallback: If no channel assigned, output safe neutral (1500)
+                                                                                    motor_out[i] = 1500; 
+                                                                                }                                                } else if (i == BLIMP_MOT_YAW || i == BLIMP_MOT_RUDDER) {                                    // Motor 3: Yaw Motor, Motor 4: Rudder Servo (Reversible)
+                                    motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], true);
+                                } else if (i == BLIMP_MOT_DEBUG) {
+                                    // Motor 6: Forward Debug (Non-Reversible DShot)
+                                    motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], false);
+                                } else {
+                                    // Lift Motors 1 & 2
+                                    motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], LIFTING_MOTORS_REVERSIBLE);
+                                }
+                                            } else {
+                                                // Standard Tricopter VTOL Logic
+                                                // Special handling for Tilt Servo (Motor 5 / Index 4)
+                                                if (i == 4) {
+                                                    SRV_Channel::Aux_servo_function_t func = SRV_Channels::get_motor_function(i);
+                                                    const SRV_Channel *chan = SRV_Channels::get_channel_for(func);
+                                                    if (chan != nullptr) {
+                                                        float thrust = _tilt_angle;
+                                                        int16_t pwm = chan->get_trim();
+                                                        if (thrust >= 0) {
+                                                            pwm += (int16_t)(thrust * (chan->get_max() - chan->get_trim()));
+                                                        } else {
+                                                            pwm += (int16_t)(thrust * (chan->get_trim() - chan->get_min()));
+                                                        }
+                                                                                    motor_out[i] = constrain_int16(pwm, chan->get_min(), chan->get_max());
+                                                                                } else {
+                                                                                    // Fallback: If no channel assigned, output safe neutral (1500)
+                                                                                    motor_out[i] = 1500; 
+                                                                                }                                                } else {
+                        // Standard logic for other motors
+                        // Force Yaw (Index 3) to be reversible.
+                        // Respect LIFTING_MOTORS_REVERSIBLE for Lift motors (Indices 0, 1, 2).
+                        bool is_reversible = (i == 3) ? true : LIFTING_MOTORS_REVERSIBLE;
+                        motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], is_reversible);
+                    }
+                }
+#else
                 if(i < 4) {
                     motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], LIFTING_MOTORS_REVERSIBLE);
                 } else {
                     motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], LATERAL_MOTORS_CONFIG4);
                 }
+#endif
             }
         }
         break;
@@ -595,16 +712,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
                         throttle_thrust = get_throttle() * compensation_gain;
                     }
             
-            #if ENABLE_TRICOPTER_VTOL_BACKEND
-                    // --- VTOL State Broadcasting ---
-                    // Scale the 0-1 progress to a 1000-2000us PWM value.
-                    uint16_t transition_pwm = 1000 + (uint16_t)(_vtol_transition_progress * 1000.0f);
-            
-                    // Place the state values into the SBUS output array on their designated channels.
-                    // Note: pwm_to_thrust is a simple inverse scaling from PWM to a -1 to 1 float.
-                    _thrust_rpyt_out[SBUS_OUTPUT_TRANSITION_PROGRESS_CHAN] = pwm_to_thrust_float(transition_pwm);
-                    _thrust_rpyt_out[SBUS_OUTPUT_PLANE_THROTTLE_CHAN] = pwm_to_thrust_float(_vtol_plane_throttle);
-            #endif
+            // ENABLE_TRICOPTER_VTOL_BACKEND block moved down after standard input assignment
             
                     // --- In-Flight PID Tuning Pass-through ---
                             #if CATERPILLAR_H_FRAME_6DOF
@@ -615,6 +723,60 @@ void AP_Motors6DOF::output_armed_stabilizing()
                             #endif
                     
                             forward_thrust = _forward_in;        lateral_thrust = _lateral_in;
+
+            #if ENABLE_TRICOPTER_VTOL_BACKEND
+                    // --- TVC Integration ---
+                    TVC_Inputs tvc_inputs;
+                    tvc_inputs.now_us = AP_HAL::micros();
+                    tvc_inputs.ahrs_healthy = true;
+                    tvc_inputs.in_failsafe = false;
+                    
+                    const AP_AHRS &ahrs = AP::ahrs();
+                    tvc_inputs.roll_rad = ahrs.roll;
+                    tvc_inputs.pitch_rad = ahrs.pitch;
+                    const Vector3f &gyro = ahrs.get_gyro();
+                    tvc_inputs.gyro.x = gyro.x;
+                    tvc_inputs.gyro.y = gyro.y;
+                    tvc_inputs.gyro.z = gyro.z;
+
+                    auto f2pwm = [](float v, float min, float max) -> int {
+                         return 1000 + (int)((constrain_float(v, min, max) - min) / (max - min) * 1000);
+                    };
+
+                    // Initialize all to neutral first
+                    for(int k=0; k<16; k++) {
+                        tvc_inputs.rc_in[k] = 1500;
+                    }
+
+                    tvc_inputs.rc_in[THRUST_CHANNEL] = f2pwm(throttle_thrust, 0.0f, 1.0f);
+                    tvc_inputs.rc_in[FORWARD_CHANNEL] = f2pwm(forward_thrust, -1.0f, 1.0f);
+                    tvc_inputs.rc_in[LATERAL_CHANNEL] = f2pwm(lateral_thrust, -1.0f, 1.0f);
+                    tvc_inputs.rc_in[TRANSITION_PROGRESS_CHANNEL] = f2pwm(_vtol_transition_progress, 0.0f, 1.0f);
+                    
+                    // Run TVC Logic
+                    TVC_Outputs tvc_outputs = tvc_run_main_logic(tvc_inputs, tvc_state, tvc_config);
+
+                    if (TRICOPTER_IS_BLIMP) {
+                        // For Blimp, we want Motor 6 to reflect the RAW forward stick input for debugging.
+                        // We must set this BEFORE we override forward_thrust for the tilt servo.
+                        _thrust_rpyt_out[BLIMP_MOT_DEBUG] = forward_thrust; 
+                    }
+
+                    // Map TVC Output (Pitch) to _tilt_angle
+                    // Direct float assignment (No un-packing)
+                    _tilt_angle = tvc_outputs.pitch_angle_norm;
+
+                    // Apply Thrust Factor to Throttle (Motors 1 & 2)
+                    throttle_thrust *= tvc_outputs.thrust_factor;
+            
+                    // --- VTOL State Broadcasting ---
+                    // Scale the 0-1 progress to a 1000-2000us PWM value.
+                    uint16_t transition_pwm = 1000 + (uint16_t)(_vtol_transition_progress * 1000.0f);
+            
+                    // Place the state values into the SBUS output array on their designated channels.
+                    _thrust_rpyt_out[SBUS_OUTPUT_TRANSITION_PROGRESS_CHAN] = pwm_to_thrust_float(transition_pwm);
+                    _thrust_rpyt_out[SBUS_OUTPUT_PLANE_THROTTLE_CHAN] = pwm_to_thrust_float(_vtol_plane_throttle);
+            #endif
 
         float rpy_out[AP_MOTORS_MAX_NUM_MOTORS]; // buffer so we don't have to multiply coefficients multiple times.
         float linear_out[AP_MOTORS_MAX_NUM_MOTORS]; // 3 linear DOF mix for each motor
