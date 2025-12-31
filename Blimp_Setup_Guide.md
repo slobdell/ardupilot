@@ -101,11 +101,36 @@ You must configure the `SERVO5` parameters to define the physical range of your 
 *   **Dual Actuation:** Yaw commands drive both the **Tail Motor (4)** and the **Rudder Servo (6)** simultaneously.
 *   **Reversible:** The tail motor spins in reverse for one direction and forward for the other.
 
-### 4.4. Attitude Stabilization Logic
+### 4.4. Automated Flight & Safety (Z-Controller)
+While the pilot has full access to -1.0 to +1.0 thrust (including emergency downward vectoring), the autopilot should generally only use gravity for descent.
+*   **Descent Priority:** To ensure the autopilot never "needs" to use active downward thrust, you must limit the commanded descent velocity to be less than the blimp's natural unpowered terminal velocity.
+*   **Requirement:**
+    *   Set `WPNAV_SPEED_DN` (Auto Mode) and `PILOT_SPEED_DN` (Loiter Mode) to a conservative value (e.g., **1.0 m/s** to **1.5 m/s**).
+    *   As long as gravity accelerates the blimp faster than this limit, the autopilot will keep the motors in the "Positive Lift" regime to govern the descent, never crossing the 0.0 threshold into "Active Down" vectoring.
+
+### 4.5. Attitude Stabilization Logic
 *   **Roll & Pitch:** Active stabilization for Roll and Pitch is **DISABLED** in the mixer (factors set to 0.0).
     *   **Why?** Blimps are "pendulum stable" (Center of Gravity is significantly below Center of Buoyancy). They naturally return to level.
     *   **The Problem with PIDs:** Attempting to actively stabilize pitch with small propellers often leads to "hunting" or oscillation because the motors lack the authority to quickly overcome the massive rotational inertia and aerodynamic damping of the hull.
     *   **Result:** The motors only respond to **Throttle** (Altitude), **Yaw** (Heading), and **Vectoring** (Position). The airframe handles stability naturally.
+
+    *   **Forward Flight:** Transitioning to 1.0 (Forward Flight) locks motors to Full Forward (no compensation).
+    *   **Max Angle:** Updated to 89 degrees.
+
+### 4.6. Flight Dynamics & Stick Mapping (270° Logic)
+The system maps the pilot's stick inputs to the 270° servo range (-90° Back to +180° Down) using the following logic:
+
+*   **Reverse (Stick Back):** `Negative Forward Input` -> **Negative Servo Angle**.
+    *   The servo tilts backward (from Vertical towards -90°).
+    *   Result: Reverse Thrust.
+*   **Cruise (Stick Forward):** `Positive Forward Input` -> **Positive Servo Angle**.
+    *   The servo tilts forward (from Vertical towards +90°).
+    *   Result: Forward Thrust.
+*   **Emergency Descent (Throttle Down):** `Negative Throttle Input` + `Positive Forward` -> **Extended Positive Servo Angle**.
+    *   The servo continues tilting past 90° (towards +180°).
+    *   Result: Downward Thrust (Inverted Propeller).
+
+*Note: This allows you to traverse the entire 270° range intuitively. Pulling the stick back gives you reverse. Pushing the stick forward gives you speed. Dropping the throttle while forward gives you a power dive.*
 
 ## 5. Parameter Configuration
 
@@ -135,6 +160,14 @@ Set these parameters in Mission Planner/QGC.
 *   `Q_A_RAT_RLL_I`, `Q_A_RAT_PIT_I`, `Q_A_RAT_YAW_I`: **0.05**.
 *   `Q_A_RAT_RLL_D`, `Q_A_RAT_PIT_D`, `Q_A_RAT_YAW_D`: **0**.
 *   `Q_M_THST_HOVER`: **0.3** (Adjust for buoyancy).
+
+### 5.5. Arming & Safety Configuration (CRITICAL)
+Since the throttle stick controls negative thrust (down) when pulled back, you cannot use standard "Low Throttle" arming.
+*   **Throttle Behavior:** Set `PILOT_THR_BHV` = **1** (Center Stick = Idle).
+    *   *Function:* This disables the "Low Throttle" arming check and tells the motor spool logic that "Center" is the idle position when landed. It does *not* automatically remap the flight control stick, which is handled by the custom firmware logic.
+*   **Arming Switch:** Set an RC Channel (e.g., `RC7_OPTION`) to **153** (Arm/Disarm).
+    *   *Procedure:* Center Throttle Stick -> Flip Switch to Arm.
+*   **Rudder Arming:** Set `ARMING_RUDDER` = **0** (Disabled) to prevent accidental stick arming.
 
 ## 6. Pre-Flight Verification
 

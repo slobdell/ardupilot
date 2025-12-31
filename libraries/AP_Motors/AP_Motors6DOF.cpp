@@ -500,6 +500,25 @@ void AP_Motors6DOF::output_min()
     // NOTE rc_write() usage vs motor_out[i] = ; this tripped me up earlier
     for (i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) {
         if (motor_enabled[i]) {
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+            if (TRICOPTER_IS_BLIMP) {
+                if (i == BLIMP_MOT_RUDDER || i == BLIMP_MOT_TILT || i == BLIMP_MOT_YAW) {
+                    rc_write(i, MOT_SPIN_NEUTRAL);
+                } else {
+                    rc_write(i, MOT_SPIN_MIN);
+                }
+            } else {
+                if(i < 4) {
+                  if(LIFTING_MOTORS_REVERSIBLE) {
+                    rc_write(i, MOT_SPIN_NEUTRAL);
+                  } else {
+                    rc_write(i, MOT_SPIN_MIN);
+                  }
+                } else {
+                  rc_write(i, MOT_SPIN_NEUTRAL); // Tilt Servo
+                }
+            }
+#else
             if(i < 4) {
               if(LIFTING_MOTORS_REVERSIBLE) {
                 rc_write(i, MOT_SPIN_NEUTRAL);
@@ -513,6 +532,7 @@ void AP_Motors6DOF::output_min()
                 rc_write(i, MOT_SPIN_MIN);
               }
             }
+#endif
         }
     }
 }
@@ -697,7 +717,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
         roll_thrust = (_roll_in + _roll_in_ff);
         pitch_thrust = (_pitch_in + _pitch_in_ff);
         yaw_thrust = (_yaw_in + _yaw_in_ff);
-        if(LIFTING_MOTORS_REVERSIBLE) {
+        if(LIFTING_MOTORS_REVERSIBLE || TRICOPTER_IS_BLIMP) {
             throttle_thrust = get_throttle_bidirectional();
         } else {
             float compensation_gain = 1.0;
@@ -786,7 +806,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
         limit.throttle_upper = false;
 
         // sanity check throttle is above zero and below current limited throttle
-        if(LIFTING_MOTORS_REVERSIBLE) {
+        if(LIFTING_MOTORS_REVERSIBLE || TRICOPTER_IS_BLIMP) {
             if (throttle_thrust <= -_throttle_thrust_max) {
                 throttle_thrust = -_throttle_thrust_max;
                 limit.throttle_lower = true;
