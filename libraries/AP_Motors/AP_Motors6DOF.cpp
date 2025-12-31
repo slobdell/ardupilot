@@ -729,8 +729,8 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     tvc_inputs.in_failsafe = false;
                     
                     const AP_AHRS &ahrs = AP::ahrs();
-                    tvc_inputs.roll_rad = ahrs.roll;
-                    tvc_inputs.pitch_rad = ahrs.pitch;
+                    tvc_inputs.roll_rad = ahrs.get_roll();
+                    tvc_inputs.pitch_rad = ahrs.get_pitch();
                     const Vector3f &gyro = ahrs.get_gyro();
                     tvc_inputs.gyro.x = gyro.x;
                     tvc_inputs.gyro.y = gyro.y;
