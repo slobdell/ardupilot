@@ -112,7 +112,7 @@ struct TVC_Debug_Data {
     float target_roll_deg;
     float vector_pitch_out;
     float vector_roll_out;
-    float thrust_factor;
+    float total_throttle;
     bool pitch_saturated;
     bool roll_saturated;
 };

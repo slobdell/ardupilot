@@ -289,7 +289,7 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     outputs.debug_data.target_roll_deg = target_roll_deg;
     outputs.debug_data.vector_pitch_out = vector_pitch_out;
     outputs.debug_data.vector_roll_out = vector_roll_out;
-    outputs.debug_data.thrust_factor = thrust_factor;
+    outputs.debug_data.total_throttle = total_throttle;
     outputs.debug_data.pitch_saturated = state.pitch_saturated;
     outputs.debug_data.roll_saturated = state.roll_saturated;
 
