@@ -27,9 +27,9 @@
 #endif
 
 #include "../../ArduCopter/custom_config.h"
-#include "TVC/TVC_Core.h"
-#include "TVC/TVC_PID.h"
-#include "TVC/TVC_Filters.h"
+#include <AP_Motors/TVC/TVC_Core.h>
+#include <AP_Motors/TVC/TVC_PID.h>
+#include <AP_Motors/TVC/TVC_Filters.h>
 #include <SRV_Channel/SRV_Channel.h>
 #include <AP_AHRS/AP_AHRS.h>
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "TVC_Filters.h"
+#include <AP_Motors/TVC/TVC_Filters.h>
 
 class LinearPIDController {
   private:

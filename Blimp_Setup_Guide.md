@@ -82,7 +82,13 @@ The system uses a "TVC" (Thrust Vectoring Controller) logic block integrated int
     *   **Command Limit:** ±60° (Safety limit for throttle boost).
     *   **Physical Limit:** +89° / -10° (Hard mechanical limits).
 
-### 4.2. Servo Configuration (CRITICAL)
+### 4.2. Advanced Vectoring: 270° Range & Emergency Descent
+While the standard configuration assumes a range for Forward/Backward flight, the blimp supports an extended **270° Servo Range** (e.g., -90° Back to +180° Down).
+*   **Concept:** Instead of reversing motors to generate downward thrust (inefficient), the system can rotate the motors 180° forward to point **Straight Down**.
+*   **Benefit:** This allows the propellers to spin in their efficient direction, generating 100% thrust for emergency descent (e.g., fighting strong thermal updrafts).
+*   **Implementation:** This requires configuring the `SERVOn_MAX` PWM to correspond to the 180° (Down) position. The control logic remains the same; the trigonometry naturally handles the extended range.
+
+### 4.3. Servo Configuration (CRITICAL)
 You must configure the `SERVO5` parameters to define the physical range of your tilt mechanism. The code uses **TRIM** as the vertical reference.
 
 *   **Vertical (Hover):** Set `SERVO5_TRIM` to the PWM value where motors point **Straight Up** (90° to fuselage).
