@@ -62,7 +62,7 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     if (!inputs.ahrs_healthy) {
         outputs.pitch_angle_norm = 0.0f;
         outputs.roll_angle_norm = 0.0f;
-        outputs.thrust_factor = 1.0f;
+        outputs.total_throttle = sbus_pwm_to_float(inputs.rc_in[THRUST_CHANNEL], 0.0f, 1.0f);
         return outputs;
     }
 #endif
@@ -78,7 +78,7 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     if (inputs.in_failsafe || all_motors_commanded_off) {
         outputs.pitch_angle_norm = 0.0f;
         outputs.roll_angle_norm = 0.0f;
-        outputs.thrust_factor = 1.0f;
+        outputs.total_throttle = sbus_pwm_to_float(inputs.rc_in[THRUST_CHANNEL], 0.0f, 1.0f);
         state.pitch_angle_pid.reset();
         state.roll_angle_pid.reset();
         state.pitch_rate_pid.reset();
@@ -172,7 +172,7 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     // 4. --- GET STATE & CALCULATE TARGETS ---
     // In OPEN_LOOP_SERVO_MODE, we still need current pitch for vector compensation
     float current_pitch_deg = degrees(inputs.pitch_rad);
-    float current_roll_deg = degrees(inputs.roll_rad); // Unused for pitch comp but good for consistency
+    // float current_roll_deg = degrees(inputs.roll_rad); // Unused for pitch comp but good for consistency
 
 #if !OPEN_LOOP_SERVO_MODE
     float current_roll_rate_dps = degrees(inputs.gyro.x);
@@ -249,10 +249,9 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     clip_vectors_for_saturation(base_throttles, &vector_pitch_out, &vector_roll_out, state.pitch_saturated, state.roll_saturated);
 #endif
 
-    float thrust_factor = 1.0f / (cosf(target_pitch_rad) * cosf(target_roll_rad));
-    // This constraint must correspond to the MAX_TARGET_ANGLE_DEG.
-    // 1/cos(60 deg) = 2.0. This prevents extreme values if an unsafe angle is ever commanded.
-    thrust_factor = constrain_float(thrust_factor, 1.0f, MAX_THRUST_FACTOR);
+    // Calculate total magnitude of the pilot's 3D request (Vertical + Forward + Lateral)
+    float total_throttle = sqrtf(powf(forward_cmd, 2) + powf(lateral_cmd, 2) + powf(thrust_cmd, 2));
+    total_throttle = constrain_float(total_throttle, 0.0f, 1.0f);
 
 #if VTOL_MODE == true
     // --- VTOL ANGLE BLENDING LOGIC ---
@@ -279,7 +278,7 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     // Direct float assignment (No SBUS packing)
     outputs.pitch_angle_norm = vector_pitch_out;
     outputs.roll_angle_norm = vector_roll_out;
-    outputs.thrust_factor = thrust_factor;
+    outputs.total_throttle = total_throttle;
 
     // 8. --- POPULATE DEBUG DATA ---
     outputs.debug_data.forward_cmd = forward_cmd;

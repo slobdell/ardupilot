@@ -121,7 +121,7 @@ struct TVC_Debug_Data {
 struct TVC_Outputs {
     float pitch_angle_norm; // -1.0 to 1.0
     float roll_angle_norm;  // -1.0 to 1.0
-    float thrust_factor;    // 1.0 to MAX_THRUST_FACTOR
+    float total_throttle;   // 0.0 to 1.0 (Total Vector Magnitude)
     bool tvc_healthy;
     TVC_Debug_Data debug_data;
 };

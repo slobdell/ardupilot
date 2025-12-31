@@ -763,8 +763,8 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     // Direct float assignment (No un-packing)
                     _tilt_angle = tvc_outputs.pitch_angle_norm;
 
-                    // Apply Thrust Factor to Throttle (Motors 1 & 2)
-                    throttle_thrust *= tvc_outputs.thrust_factor;
+                    // Override Throttle with Total Vector Magnitude (Motors 1 & 2)
+                    throttle_thrust = tvc_outputs.total_throttle;
             
                     // --- VTOL State Broadcasting ---
                     // Scale the 0-1 progress to a 1000-2000us PWM value.
