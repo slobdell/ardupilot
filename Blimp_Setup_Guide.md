@@ -107,9 +107,11 @@ You must configure the `SERVO5` parameters to define the physical range of your 
 While the pilot has full access to -1.0 to +1.0 thrust (including emergency downward vectoring), the autopilot and Loiter modes should generally only use gravity for descent.
 *   **Descent Priority:** To ensure the system never "needs" to use active downward thrust automatically, you must limit the commanded descent velocity to be less than the blimp's natural unpowered terminal velocity.
 *   **Vertical Speed Requirements:**
-    *   `WPNAV_SPEED_DN` (Auto Mode Descent): Set to a conservative value (e.g., **100 cm/s**).
-    *   `PILOT_SPEED_DN` (Loiter Mode Descent): Set to a conservative value (e.g., **100 cm/s**).
-    *   `PILOT_SPEED_UP` (Loiter Mode Climb): Set to match your expected lift capability (e.g., **200 cm/s**).
+    *   `WPNAV_SPEED_DN` (Auto Mode Descent): Set to **100 cm/s**.
+    *   `PILOT_SPEED_DN` (Loiter Mode Descent): Set to **100 cm/s**.
+    *   `PILOT_SPEED_UP` (Loiter Mode Climb): Set to **200 cm/s**.
+    *   `PILOT_ACCEL_Z`: Set to **50 cm/s²**.
+    *   `WPNAV_ACCEL_Z`: Set to **50 cm/s²**.
 *   **Behavior:** As long as gravity accelerates the blimp faster than the `DN_SPEED` limit, the autopilot will keep the motors in the "Positive Lift" regime to govern the descent, never crossing the 0.0 threshold into "Active Down" vectoring.
 
 ### 4.5. Attitude Stabilization Logic
@@ -141,37 +143,51 @@ The system maps the pilot's stick inputs to the 270° servo range (-90° Back to
 Set these parameters in Mission Planner/QGC.
 
 ### 5.1. Class & Type
+*   `Q_ENABLE`: **1** (Enable QuadPlane)
 *   `Q_FRAME_CLASS`: **1** (Quad)
 *   `Q_FRAME_TYPE`: **1** (X)
-*   `Q_ENABLE`: **1** (Enable QuadPlane)
 
-### 5.2. Motor & Servo Functions
+### 5.2. Flight Modes
+This aircraft operates exclusively in VTOL (Quad) modes.
+*   **Mode Channel:** Set `FLTMODE_CH` = **6**.
+*   **Mode 1:** `QSTABILIZE` (Manual Control)
+*   **Mode 2:** `QLOITER` (Position Hold - requires Optical Flow)
+*   **Mode 3:** `QHOVER` (Altitude Hold with manual vectoring)
+
+### 5.3. Motor & Servo Functions (MicoAir743 Specific)
 *   `SERVO1_FUNCTION`: **33** (Motor 1) -> Right Lift
 *   `SERVO2_FUNCTION`: **34** (Motor 2) -> Left Lift
-*   `SERVO3_FUNCTION`: **36** (Motor 4) -> Yaw Motor
-*   `SERVO4_FUNCTION`: **39** (Motor 7) -> Debug Forward
+*   `SERVO3_FUNCTION`: **0** (Disabled)
+*   `SERVO4_FUNCTION`: **0** (Disabled)
 *   `SERVO5_FUNCTION`: **38** (Motor 6) -> Rudder Servo
 *   `SERVO6_FUNCTION`: **37** (Motor 5) -> Tilt Servo
+*   `SERVO7_FUNCTION`: **39** (Motor 7? No, our debug motor is indexed as Motor 6 in the code layout we built).
+    *   In the code: `BLIMP_MOT_DEBUG = 5` (which is Motor 6).
+    *   So: **`SERVO7_FUNCTION` = 38 (Motor 6 - Debug)**.
 
-### 5.3. ESC & DShot
-*   `MOT_PWM_TYPE`: **6** (DShot600).
-*   `SERVO_BLH_AUTO`: **1**.
-*   `SERVO_BLH_MASK`: **15** (Enable for Chan 1, 2, 3, 4). *Pins 5,6 are PWM.*
-*   `SERVO_BLH_BDMASK`: **4** (Enable Bidirectional DShot for Chan 3 ONLY).
+### 5.4. ESC & DShot (MicoAir743)
+*   **`MOT_PWM_TYPE`**: **5** (DShot300).
+*   **`SERVO_BLH_AUTO`**: **0** (Disabled - rely on manual mask for hybrid PWM/DShot).
+*   **`SERVO_BLH_MASK`**: **15** (Enables DShot for pins 1, 2, 3, 4).
+*   **`SERVO_BLH_OTYPE`**: **5** (Explicitly set to DShot300 for AM32/BLHeli).
+*   **`SERVO_BLH_BDMASK`**: **4** (Enable Bidirectional DShot for Pin 3 ONLY).
 
-### 5.4. PID Tuning (Blimp Specifics)
+### 5.5. PID Tuning (Blimp Specifics)
 *   `Q_A_RAT_RLL_P`, `Q_A_RAT_PIT_P`, `Q_A_RAT_YAW_P`: **0.05** (Start very low).
 *   `Q_A_RAT_RLL_I`, `Q_A_RAT_PIT_I`, `Q_A_RAT_YAW_I`: **0.05**.
 *   `Q_A_RAT_RLL_D`, `Q_A_RAT_PIT_D`, `Q_A_RAT_YAW_D`: **0**.
 *   `Q_M_THST_HOVER`: **0.3** (Adjust for buoyancy).
 
-### 5.5. Arming & Safety Configuration (CRITICAL)
+### 5.6. Arming & Safety Configuration (CRITICAL)
 Since the throttle stick controls negative thrust (down) when pulled back, you cannot use standard "Low Throttle" arming.
 *   **Throttle Behavior:** Set `PILOT_THR_BHV` = **1** (Center Stick = Idle).
     *   *Function:* This disables the "Low Throttle" arming check and tells the motor spool logic that "Center" is the idle position when landed. It does *not* automatically remap the flight control stick, which is handled by the custom firmware logic.
 *   **Arming Switch:** Set an RC Channel (e.g., `RC7_OPTION`) to **153** (Arm/Disarm).
     *   *Procedure:* Center Throttle Stick -> Flip Switch to Arm.
 *   **Rudder Arming:** Set `ARMING_RUDDER` = **0** (Disabled) to prevent accidental stick arming.
+*   **Pre-Arm Bypass:**
+    *   Set `Q_ASSIST_SPEED` = **-1** (strictly required to disable the check).
+    *   Set `ARMING_CHECK` = **114** (recommended mask for this setup).
 
 ## 6. Pre-Flight Verification
 

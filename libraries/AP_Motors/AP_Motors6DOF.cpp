@@ -770,7 +770,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
 
                     // Yaw (RC4) -> Yaw/Rudder (-1 to 1) with Deadband
                     float rc_yaw = (hal.rcin->read(3) - 1500) / 500.0f;
-                    if (fabsf(rc_yaw) < 0.05f) {
+                    if (fabsf(rc_yaw) < MANUAL_YAW_DEADBAND) {
                         rc_yaw = 0.0f;
                     }
                     yaw_thrust = constrain_float(rc_yaw, -1.0f, 1.0f);

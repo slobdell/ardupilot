@@ -140,6 +140,9 @@ const float REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG = -90.0f; // Example: Max reverse 
 // Deadband to prevent rapid 180 deg servo flips around the vertical thrust zero-point.
 const float VERTICAL_THROTTLE_DEADBAND = 0.05f;
 
+// Deadband for manual yaw control to prevent jitter.
+const float MANUAL_YAW_DEADBAND = 0.05f;
+
 // =============================================================================
 // --- HELPER PROTOTYPES (Internal to this file) ---
 // =============================================================================
