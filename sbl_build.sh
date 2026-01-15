@@ -14,13 +14,13 @@ echo "building for $BOARD"
 # ./waf configure --board $BOARD --debug --disable-scripting
 #./waf configure --board $BOARD
 #./waf distclean
-./waf copter
-cp ./build/$BOARD/bin/arducopter.apj ~/Desktop/
-cp ./build/$BOARD/bin/arducopter_with_bl.hex ~/Desktop/
-cp ./build/$BOARD/bin/arducopter_with_bl.hex ./arducopter_with_bl.hex
-cp ./build/$BOARD/bin/arducopter ~/Desktop/arducopter.elf
-cp ./build/$BOARD/bin/arducopter ./arducopter.elf
-# openocd -f interface/stlink.cfg -f target/stm32h7x.cfg -c "program arducopter.elf verify reset exit"
+./waf plane
+cp ./build/$BOARD/bin/arduplane.apj ~/Desktop/
+cp ./build/$BOARD/bin/arduplane_with_bl.hex ~/Desktop/
+cp ./build/$BOARD/bin/arduplane_with_bl.hex ./arduplane_with_bl.hex
+cp ./build/$BOARD/bin/arduplane ~/Desktop/arduplane.elf
+cp ./build/$BOARD/bin/arduplane ./arduplane.elf
+# openocd -f interface/stlink.cfg -f target/stm32h7x.cfg -c "program arduplane.elf verify reset exit"
 #
 # FOR TESTING
 # ./waf configure --board sitl
