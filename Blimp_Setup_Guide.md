@@ -182,12 +182,14 @@ This aircraft operates exclusively in VTOL (Quad) modes.
 Since the throttle stick controls negative thrust (down) when pulled back, you cannot use standard "Low Throttle" arming.
 *   **Throttle Behavior:** Set `PILOT_THR_BHV` = **1** (Center Stick = Idle).
     *   *Function:* This disables the "Low Throttle" arming check and tells the motor spool logic that "Center" is the idle position when landed. It does *not* automatically remap the flight control stick, which is handled by the custom firmware logic.
-*   **Arming Switch:** Set an RC Channel (e.g., `RC7_OPTION`) to **153** (Arm/Disarm).
+*   **Arming Switch:** Set `RC9_OPTION` to **153** (Arm/Disarm).
     *   *Procedure:* Center Throttle Stick -> Flip Switch to Arm.
 *   **Rudder Arming:** Set `ARMING_RUDDER` = **0** (Disabled) to prevent accidental stick arming.
+*   **Arming Checks (CRITICAL):**
+    *   Set `ARMING_CHECK` to a value that excludes the **RC** check (or set to **0** for testing).
+    *   *Why?* The standard ArduPilot RC check requires the throttle to be at minimum PWM to arm. In this blimp configuration, minimum PWM is **Full Reverse**, while the expected idle position is **Neutral (1500)**. Keeping the RC check enabled will prevent arming at the neutral position.
 *   **Pre-Arm Bypass:**
     *   Set `Q_ASSIST_SPEED` = **-1** (strictly required to disable the check).
-    *   Set `ARMING_CHECK` = **114** (recommended mask for this setup).
 
 ## 6. Pre-Flight Verification
 

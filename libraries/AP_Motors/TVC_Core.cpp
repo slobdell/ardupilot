@@ -86,7 +86,7 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     }
 
     // 2. --- DE-INTERPOLATE INPUTS ---
-    float thrust_cmd  = sbus_pwm_to_float(inputs.rc_in[THRUST_CHANNEL],  0.0f, 1.0f);
+    float thrust_cmd  = sbus_pwm_to_float(inputs.rc_in[THRUST_CHANNEL], -1.0f, 1.0f);
     float forward_cmd = sbus_pwm_to_float(inputs.rc_in[FORWARD_CHANNEL],-1.0f, 1.0f);
     float lateral_cmd = sbus_pwm_to_float(inputs.rc_in[LATERAL_CHANNEL],-1.0f, 1.0f);
 

@@ -620,25 +620,40 @@ void AP_Motors6DOF::output_to_motors()
                                                 if (i == BLIMP_MOT_TILT) { 
                                                     // Motor 5: Tilt Servo (SRV_Channel Interpolation)
                                                     SRV_Channel::Aux_servo_function_t func = SRV_Channels::get_motor_function(i);
-                                                    const SRV_Channel *chan = SRV_Channels::get_channel_for(func);
-                                                                                                                                if (chan != nullptr) {
-                                                                                                                                    float thrust = _tilt_angle;
-                                                                                                                                    int16_t pwm;
-                                                                                                                                    if (_manual_override_active) {
-                                                                                                                                        // Manual Mode: Linear Map Min->Max (Ignoring Trim)
-                                                                                                                                        // thrust -1..1 -> 0..1
-                                                                                                                                        float percent = (thrust + 1.0f) * 0.5f;
-                                                                                                                                        pwm = chan->get_output_min() + (uint16_t)(percent * (chan->get_output_max() - chan->get_output_min()));
-                                                                                                                                    } else {
-                                                                                                                                        // Auto/Stabilize: Trim-Centric Logic
+                                                                                                                                                            const SRV_Channel *chan = SRV_Channels::get_channel_for(func);
+                                                                                                                                                            if (chan != nullptr) {
+                                                                                                                                                                float thrust = _tilt_angle;
+                                                                                                                                                                if (chan->get_reversed()) {
+                                                                                                                                                                    thrust = -thrust;
+                                                                                                                                                                }
+                                                                                                                                                                
+                                                                                                                                                                // SBL DEBUG: Log reversal status
+                                                                                                                                                                static uint32_t last_log_ms = 0;
+                                                                                                                                                                uint32_t now = AP_HAL::millis();
+                                                                                                                                                                if (now - last_log_ms > 1000) {
+                                                                                                                                                                    last_log_ms = now;
+                                                                                                                                                                    gcs().send_text(MAV_SEVERITY_INFO, "SBL_SRV: Rev:%d TltIn:%.2f TltOut:%.2f", 
+                                                                                                                                                                                    (int)chan->get_reversed(), (double)_tilt_angle, (double)thrust);
+                                                                                                                                                                }
+                                                                                                        
+                                                                                                                                                                int16_t pwm;
+                                                                                                                                                                if (_manual_override_active) {
+                                                                                                                                        // Manual Mode: Use Trim-Centric Logic to match Auto behavior
                                                                                                                                         pwm = chan->get_trim();
                                                                                                                                         if (thrust >= 0) {
                                                                                                                                             pwm += (int16_t)(thrust * (chan->get_output_max() - chan->get_trim()));
-                                                                                                                                        }
-                                                                                                                                        else {
+                                                                                                                                        } else {
                                                                                                                                             pwm += (int16_t)(thrust * (chan->get_trim() - chan->get_output_min()));
                                                                                                                                         }
-                                                                                                                                    }
+                                                                                                                                    } else {
+                                                                                                                                                                                                                                                        // Auto/Stabilize: Trim-Centric Logic
+                                                                                                                                                                                                                                                        pwm = chan->get_trim();
+                                                                                                                                                                                                                                                        if (thrust >= 0) {
+                                                                                                                                                                                                                                                            pwm += (int16_t)(thrust * (chan->get_output_max() - chan->get_trim()));
+                                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                                        else {
+                                                                                                                                                                                                                                                            pwm += (int16_t)(thrust * (chan->get_trim() - chan->get_output_min()));
+                                                                                                                                                                                                                                                        }                                                                                                                                    }
                                                                                                                                     motor_out[i] = constrain_int16(pwm, chan->get_output_min(), chan->get_output_max());
                                                                                                                                 } else {                                                                                    // Fallback: If no channel assigned, output safe neutral (1500)
                                                                                     motor_out[i] = 1500; 
@@ -648,8 +663,9 @@ void AP_Motors6DOF::output_to_motors()
                                     // Motor 6: Forward Debug (Non-Reversible DShot)
                                     motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], false);
                                 } else {
-                                    // Lift Motors 1 & 2
-                                    motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], LIFTING_MOTORS_REVERSIBLE);
+                                    // Lift Motors 1 & 2 (Unidirectional, rely on Vectoring for direction)
+                                    // Pass absolute magnitude so they spin up for negative (downward) thrust
+                                    motor_out[i] = calc_thrust_to_pwm(fabsf(_thrust_rpyt_out[i]), LIFTING_MOTORS_REVERSIBLE);
                                 }
                                             } else {
                                                 // Standard Tricopter VTOL Logic
@@ -729,6 +745,15 @@ void AP_Motors6DOF::output_armed_stabilizing()
         yaw_thrust = (_yaw_in + _yaw_in_ff);
         if(LIFTING_MOTORS_REVERSIBLE || TRICOPTER_IS_BLIMP) {
             throttle_thrust = get_throttle_bidirectional();
+            
+            // SBL DEBUG: Verify we are in the bidirectional block
+            static uint32_t last_log_ms = 0;
+            uint32_t now = AP_HAL::millis();
+            if (now - last_log_ms > 1000) {
+                last_log_ms = now;
+                gcs().send_text(MAV_SEVERITY_INFO, "SBL_BIDI: Entered Bidirectional Block. Val: %.2f", (double)throttle_thrust);
+            }
+
         } else {
             float compensation_gain = 1.0;
             // thrust linearization accounted for on the end motor controller
@@ -738,6 +763,8 @@ void AP_Motors6DOF::output_armed_stabilizing()
             }
                         throttle_thrust = get_throttle() * compensation_gain;
                     }
+
+
             
             // ENABLE_TRICOPTER_VTOL_BACKEND block moved down after standard input assignment
             
@@ -752,24 +779,25 @@ void AP_Motors6DOF::output_armed_stabilizing()
                             forward_thrust = _forward_in;        lateral_thrust = _lateral_in;
 
             #if ENABLE_TRICOPTER_VTOL_BACKEND
-                // Check for Manual Override Switch (RC9 < 1200)
-                if (hal.rcin->read(RC_INPUT_MANUAL_OVERRIDE_CHAN) < 1200) {
+                // Check for Manual Override Switch (RC8 > 1200)
+                // Channel 8 is index 7.
+                uint16_t override_pwm = RC_Channels::rc_channel(7)->get_radio_in();
+                if (override_pwm > 1200) {
                     _manual_override_active = true;
 
                     // --- Manual Passthrough Logic ---
                     // Throttle (RC3) -> Lift Motors (0-1)
-                    // Note: hal.rcin->read returns 1000-2000 roughly.
-                    float rc_throttle = (hal.rcin->read(2) - 1000) / 1000.0f;
+                    float rc_throttle = (RC_Channels::rc_channel(2)->get_radio_in() - 1000) / 1000.0f;
                     throttle_thrust = constrain_float(rc_throttle, 0.0f, 1.0f);
 
                     // Pitch (RC2) -> Tilt Servo (-1 to 1)
-                    // 1000 -> -1 (Back), 1500 -> 0 (Vertical), 2000 -> 1 (Forward/Down)
-                    float rc_pitch = (hal.rcin->read(1) - 1500) / 500.0f;
-                    _tilt_angle = constrain_float(rc_pitch, -1.0f, 1.0f);
+                    // Invert stick input to align with Auto/Forward vectoring direction
+                    float rc_pitch = (RC_Channels::rc_channel(1)->get_radio_in() - 1500) / 500.0f;
+                    _tilt_angle = -constrain_float(rc_pitch, -1.0f, 1.0f);
                     forward_thrust = _tilt_angle; // For debug motor
 
                     // Yaw (RC4) -> Yaw/Rudder (-1 to 1) with Deadband
-                    float rc_yaw = (hal.rcin->read(3) - 1500) / 500.0f;
+                    float rc_yaw = (RC_Channels::rc_channel(3)->get_radio_in() - 1500) / 500.0f;
                     if (fabsf(rc_yaw) < MANUAL_YAW_DEADBAND) {
                         rc_yaw = 0.0f;
                     }
@@ -787,6 +815,13 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     _manual_override_active = false;
                     
                     // --- TVC Integration (Standard Logic) ---
+                    if (TRICOPTER_IS_BLIMP) {
+                        // Scale forward/lateral inputs by 2.0 to overcome Q_ANGLE_MAX limitation (sin(30)=0.5).
+                        // This allows full +/- 1.0 input authority for vectoring.
+                        forward_thrust *= 2.0f;
+                        lateral_thrust *= 2.0f;
+                    }
+
                     TVC_Inputs tvc_inputs;
                     tvc_inputs.now_us = AP_HAL::micros();
                     tvc_inputs.ahrs_healthy = true;
@@ -809,7 +844,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
                         tvc_inputs.rc_in[k] = 1500;
                     }
 
-                    tvc_inputs.rc_in[THRUST_CHANNEL] = f2pwm(throttle_thrust, 0.0f, 1.0f);
+                    tvc_inputs.rc_in[THRUST_CHANNEL] = f2pwm(throttle_thrust, -1.0f, 1.0f);
                     tvc_inputs.rc_in[FORWARD_CHANNEL] = f2pwm(forward_thrust, -1.0f, 1.0f);
                     tvc_inputs.rc_in[LATERAL_CHANNEL] = f2pwm(lateral_thrust, -1.0f, 1.0f);
                     tvc_inputs.rc_in[TRANSITION_PROGRESS_CHANNEL] = f2pwm(_vtol_transition_progress, 0.0f, 1.0f);
@@ -829,6 +864,18 @@ void AP_Motors6DOF::output_armed_stabilizing()
 
                     // Override Throttle with Total Vector Magnitude (Motors 1 & 2)
                     throttle_thrust = tvc_outputs.total_throttle;
+
+                    // SBL DEBUG: Inspect TVC Internals
+                    static uint32_t last_debug_ms = 0;
+                    uint32_t now = AP_HAL::millis();
+                    if (now - last_debug_ms > 1000) {
+                        last_debug_ms = now;
+                        gcs().send_text(MAV_SEVERITY_INFO, "TVC_DBG: FwdCmd:%.2f ThrCmd:%.2f TgtDeg:%.1f Out:%.2f", 
+                                        (double)tvc_outputs.debug_data.forward_cmd,
+                                        (double)tvc_outputs.debug_data.thrust_cmd,
+                                        (double)tvc_outputs.debug_data.target_pitch_deg,
+                                        (double)tvc_outputs.debug_data.vector_pitch_out);
+                    }
             
                     // --- VTOL State Broadcasting ---
                     // Scale the 0-1 progress to a 1000-2000us PWM value.
@@ -839,6 +886,17 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     _thrust_rpyt_out[SBUS_OUTPUT_PLANE_THROTTLE_CHAN] = pwm_to_thrust_float(_vtol_plane_throttle);
                 }
             #endif
+
+        // SBL DEBUG (Combined)
+        static uint32_t last_debug_ms = 0;
+        uint32_t now = AP_HAL::millis();
+        if (now - last_debug_ms > 1000) {
+            last_debug_ms = now;
+            gcs().send_text(MAV_SEVERITY_INFO, "SBL: Tlt:%.2f Prg:%.2f Fwd:%.2f Thr:%.2f",
+                            (double)_tilt_angle, (double)_vtol_transition_progress, (double)forward_thrust, (double)throttle_thrust);
+            gcs().send_text(MAV_SEVERITY_INFO, "SBL_IN: FwdIn:%.2f LatIn:%.2f ThrIn:%.2f", 
+                            (double)_forward_in, (double)_lateral_in, (double)throttle_thrust);
+        }
 
         float rpy_out[AP_MOTORS_MAX_NUM_MOTORS]; // buffer so we don't have to multiply coefficients multiple times.
         float linear_out[AP_MOTORS_MAX_NUM_MOTORS]; // 3 linear DOF mix for each motor

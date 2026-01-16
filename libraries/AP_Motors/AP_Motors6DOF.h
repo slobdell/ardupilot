@@ -59,7 +59,8 @@ public:
 
     // set vtol state from quadplane
     void set_vtol_state(float transition_progress, int16_t plane_throttle) {
-        _vtol_transition_progress = transition_progress;
+        // SBL: Temporarily force 0.0 (Hover Mode) to bypass transition logic issues
+        _vtol_transition_progress = 0.0f; // transition_progress;
         _vtol_plane_throttle = plane_throttle;
     }
 

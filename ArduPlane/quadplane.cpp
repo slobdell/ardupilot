@@ -1010,7 +1010,12 @@ void QuadPlane::hold_stabilize(float throttle_in)
     // call attitude controller
     multicopter_attitude_rate_update(get_desired_yaw_rate_cds(false));
 
-    if ((throttle_in <= 0) && !air_mode_active()) {
+    bool is_reversible = LIFTING_MOTORS_REVERSIBLE;
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    is_reversible |= TRICOPTER_IS_BLIMP;
+#endif
+
+    if ((throttle_in <= 0) && !air_mode_active() && !is_reversible) {
         set_desired_spool_state(AP_Motors::DesiredSpoolState::GROUND_IDLE);
         attitude_control->set_throttle_out(0, true, 0);
         relax_attitude_control();
@@ -1109,6 +1114,12 @@ float QuadPlane::get_pilot_throttle()
 
     // normalize to [0,1]
     throttle_in /= plane.channel_throttle->get_range();
+
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    if (TRICOPTER_IS_BLIMP && in_vtol_mode()) {
+        return throttle_in;
+    }
+#endif
 
     if (is_positive(throttle_expo)) {
         // get hover throttle level [0,1]
@@ -1830,6 +1841,12 @@ void QuadPlane::update(void)
  */
 void QuadPlane::update_throttle_suppression(void)
 {
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    if (TRICOPTER_IS_BLIMP) {
+        return;
+    }
+#endif
+
     // if the motors have been running in the last 2 seconds then
     // allow them to run now
     if (AP_HAL::millis() - last_motors_active_ms < 2000) {

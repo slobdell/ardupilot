@@ -644,7 +644,16 @@ void AP_MotorsMulticopter::output_logic()
         _throttle_thrust_max += spool_step;
 
         // constrain ramp value and update mode
-        if (_throttle_thrust_max >= MIN(get_throttle(), get_current_limit_max_throttle())) {
+        float throttle_demand = get_throttle();
+        if (LIFTING_MOTORS_REVERSIBLE) {
+             throttle_demand = fabsf(get_throttle_bidirectional());
+        }
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+        else if (TRICOPTER_IS_BLIMP) {
+            throttle_demand = fabsf(get_throttle_bidirectional());
+        }
+#endif
+        if (_throttle_thrust_max >= MIN(throttle_demand, get_current_limit_max_throttle())) {
             _throttle_thrust_max = get_current_limit_max_throttle();
             _spool_state = SpoolState::THROTTLE_UNLIMITED;
         } else if (_throttle_thrust_max < 0.0f) {

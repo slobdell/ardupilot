@@ -14,6 +14,7 @@ echo "building for $BOARD"
 # ./waf configure --board $BOARD --debug --disable-scripting
 #./waf configure --board $BOARD
 #./waf distclean
+./waf configure --board $BOARD
 ./waf plane
 cp ./build/$BOARD/bin/arduplane.apj ~/Desktop/
 cp ./build/$BOARD/bin/arduplane_with_bl.hex ~/Desktop/

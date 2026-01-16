@@ -127,7 +127,7 @@ struct TVC_Outputs {
 };
 
 // State structure: All data that must persist between loops
-const float MAX_TARGET_ANGLE_DEG = 89.0f;
+const float MAX_TARGET_ANGLE_DEG = 180.0f;
 const float MAX_SAFE_ANGLE_RAD = MAX_TARGET_ANGLE_DEG * (M_PI / 180.0);
 const float MAX_THRUST_FACTOR = 1.0f / cosf(MAX_SAFE_ANGLE_RAD);
 const float max_tan_angle = tanf(MAX_TARGET_ANGLE_DEG * M_PI / 180.0);
