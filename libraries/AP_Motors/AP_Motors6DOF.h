@@ -41,7 +41,21 @@ public:
     // Override parent
     void setup_motors(motor_frame_class frame_class, motor_frame_type frame_type) override;
 
-    // Override parent
+    // Structure for passing Plane state/demands to the backend
+    struct PlaneInputs {
+        float pitch_cd;     // Desired Pitch (centidegrees)
+        float roll_cd;      // Desired Roll (centidegrees)
+        float throttle_pct; // Throttle 0..100
+        float rudder_input; // Rudder servo input -4500..4500
+        float elevator_input;// Elevator servo input -4500..4500
+        float aileron_input;// Aileron servo input -4500..4500
+        float transition_progress; // 0.0 (VTOL) -> 1.0 (Plane)
+    };
+    
+    // Inject Plane state for hybrid control
+    void set_plane_inputs(const PlaneInputs &inputs) { _plane_inputs = inputs; }
+
+    // output_min - sends minimum values out to the motors
     void output_min() override;
 
     // Map thrust input -1~1 to pwm output 1100~1900
@@ -58,13 +72,6 @@ public:
 
     bool set_reversed(int motor_number, bool reversed);
 
-    // set vtol state from quadplane
-    void set_vtol_state(float transition_progress, int16_t plane_throttle) {
-        // SBL: Temporarily force 0.0 (Hover Mode) to bypass transition logic issues
-        _vtol_transition_progress = 0.0f; // transition_progress;
-        _vtol_plane_throttle = plane_throttle;
-    }
-
     // var_info for holding Parameter information
     static const struct AP_Param::GroupInfo        var_info[];
 
@@ -79,10 +86,6 @@ protected:
     void output_armed_stabilizing_vectored();
     void output_armed_stabilizing_vectored_6dof();
 
-    // vtol state
-    float _vtol_transition_progress;
-    int16_t _vtol_plane_throttle;
-
     // Parameters
     AP_Int8             _motor_reverse[AP_MOTORS_MAX_NUM_MOTORS];
     AP_Float            _forwardVerticalCouplingFactor;
@@ -96,6 +99,8 @@ protected:
 #if EMERGENCY_BLIMP_MANUAL_MODE
     bool                _manual_override_active; // True if manual bypass is engaged
 #endif
+
+    PlaneInputs         _plane_inputs;
 
     // current limiting
     float _output_limited = 1.0f;
