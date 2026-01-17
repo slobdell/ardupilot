@@ -12,7 +12,7 @@
 - [ ] **Output Function Mapping:** Rename/Refactor motor outputs to use standard Servo Functions (e.g., `k_scripting1`, `k_yaw`) where appropriate. This is necessary to prepare for sharing actuators with the QuadPlane/Plane code without function conflicts.
 
 ## Safety & Control Logic
-- [ ] **Transient Thrust Limiting (Emergency Descent):**
+- [x] **Transient Thrust Limiting (Emergency Descent):**
     *   *Problem:* Commanding full down (-1.0) causes motors to spin to 100% immediately while servos are still rotating from Up/Forward to Down (180°). This results in a transient burst of wrong-way thrust.
     *   *Goal:* Clip/Limit throttle output based on the servo's *actual* (or estimated) position relative to the target vector. Only allow full power once the vector is aligned.
     *   *Solution (Verified):* Implement a "Virtual Servo" model in `AP_Motors6DOF` similar to `Tiltrotor::slew`.

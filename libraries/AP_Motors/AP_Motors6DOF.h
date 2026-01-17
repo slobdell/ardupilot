@@ -17,7 +17,8 @@ public:
 
     AP_Motors6DOF(uint16_t speed_hz = AP_MOTORS_SPEED_DEFAULT) :
         AP_MotorsMatrix(speed_hz),
-        _tilt_angle(0.0f)
+        _tilt_angle(0.0f),
+        _current_tilt_deg(0.0f)
 #if EMERGENCY_BLIMP_MANUAL_MODE
         , _manual_override_active(false) 
 #endif
@@ -91,6 +92,7 @@ protected:
     float               _tilt_factor[AP_MOTORS_MAX_NUM_MOTORS];     // each motors contribution to tilt angle (servo)
     
     float               _tilt_angle; // The calculated tilt angle (-1 to 1)
+    float               _current_tilt_deg; // Estimated physical position in degrees
 #if EMERGENCY_BLIMP_MANUAL_MODE
     bool                _manual_override_active; // True if manual bypass is engaged
 #endif

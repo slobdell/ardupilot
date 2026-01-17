@@ -845,6 +845,28 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     // Override Throttle with Total Vector Magnitude (Motors 1 & 2)
                     throttle_thrust = tvc_outputs.total_throttle;
 
+                    if (TRICOPTER_IS_BLIMP) {
+                        // --- Slew Limiter & Transient Thrust Mitigation ---
+                        float tilt_rate = 40.0f; // Default fallback matching Q_TILT_RATE_UP
+                        QuadPlane *qp = QuadPlane::get_singleton();
+                        if (qp != nullptr) {
+                            tilt_rate = (float)qp->tiltrotor.max_rate_up_dps;
+                        }
+                        if (tilt_rate <= 1.0f) tilt_rate = 40.0f; // Safety clamp for uninitialized params
+
+                        float target_deg = tvc_outputs.debug_data.target_pitch_deg;
+                        float max_change = tilt_rate * _dt;
+                        _current_tilt_deg = constrain_float(target_deg, _current_tilt_deg - max_change, _current_tilt_deg + max_change);
+
+                        // Calculate error between estimated physical position and target
+                        float error_deg = fabsf(_current_tilt_deg - target_deg);
+                        // Scale throttle by cosine of error (clamped to 0..1). 
+                        // If error > 90 deg, throttle is cut completely.
+                        float throttle_scaler = constrain_float(cosf(radians(error_deg)), 0.0f, 1.0f);
+                        
+                        throttle_thrust *= throttle_scaler;
+                    }
+
                     // --- VTOL State Broadcasting ---
                     // Scale the 0-1 progress to a 1000-2000us PWM value.
                     uint16_t transition_pwm = 1000 + (uint16_t)(_vtol_transition_progress * 1000.0f);

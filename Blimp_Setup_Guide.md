@@ -175,10 +175,18 @@ This aircraft operates exclusively in VTOL (Quad) modes.
 *   **`SERVO_BLH_BDMASK`**: **0** (Disable Bidirectional DShot unless RPM filtering is needed).
 
 ### 5.5. PID Tuning (Blimp Specifics)
-*   `Q_A_RAT_RLL_P`, `Q_A_RAT_PIT_P`, `Q_A_RAT_YAW_P`: **0.05** (Start very low).
-*   `Q_A_RAT_RLL_I`, `Q_A_RAT_PIT_I`, `Q_A_RAT_YAW_I`: **0.05**.
-*   `Q_A_RAT_RLL_D`, `Q_A_RAT_PIT_D`, `Q_A_RAT_YAW_D`: **0**.
-*   `Q_M_THST_HOVER`: **0.3** (Adjust for buoyancy).
+*   **Pitch & Roll:**
+    *   `Q_A_RAT_RLL_P`, `Q_A_RAT_PIT_P`: **0.05** (Start very low).
+    *   `Q_A_RAT_RLL_I`, `Q_A_RAT_PIT_I`: **0.05**.
+    *   `Q_A_RAT_RLL_D`, `Q_A_RAT_PIT_D`: **0**.
+*   **Yaw (Crucial for Inertia):**
+    *   `Q_A_RAT_YAW_P`: **0.1** (Low P to prevent wag).
+    *   `Q_A_RAT_YAW_I`: **0.01** (Minimal I to prevent windup).
+    *   `Q_A_RAT_YAW_D`: **0.0** (Disabled).
+    *   `Q_A_RAT_YAW_FF`: **0.5** (Primary control authority - Direct Stick-to-Motor).
+    *   `Q_A_RATE_Y_MAX`: **30** (Limit max yaw rate to 30 deg/s to prevent saturation).
+*   **Thrust:**
+    *   `Q_M_THST_HOVER`: **0.3** (Adjust for buoyancy).
 
 ### 5.6. Arming & Safety Configuration (CRITICAL)
 Since the throttle stick controls negative thrust (down) when pulled back, you cannot use standard "Low Throttle" arming.
@@ -213,6 +221,20 @@ Since the throttle stick controls negative thrust (down) when pulled back, you c
 
 4.  **Debug Test:**
     *   If enabled, Motor 7 should spin proportional to your forward pitch stick input.
+
+## 7. Recommended Peripherals
+
+### 7.1. Rangefinder
+*   **Model:** **Benewake TF02-Pro** (Lidar).
+*   **Range:** ~40m (Indoor/Outdoor).
+*   **Connection:** Serial (UART).
+*   **Parameters:**
+    *   `SERIALx_PROTOCOL`: **9** (Rangefinder).
+    *   `SERIALx_BAUD`: **115** (115200).
+    *   `RNGFND1_TYPE`: **19** (Benewake TF02).
+    *   `RNGFND1_MIN_CM`: **10**.
+    *   `RNGFND1_MAX_CM`: **4000**.
+    *   `RNGFND1_ORIENT`: **25** (Down).
 
 ---
 **Note:** This configuration uses `OPEN_LOOP_SERVO_MODE` logic, bypassing internal angular PIDs for the tilt mechanism and relying on direct trigonometric mapping for robust, predictable vectoring.
