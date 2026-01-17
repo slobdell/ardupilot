@@ -64,3 +64,31 @@ The main loop executes the following sequence continuously:
 
 The setup function handles all one-time hardware and software initialization. It initializes the IMU, the Madgwick filter, the SBUS receiver (Bus A) and transmitter (Bus B), and all PID and sensor filters. It also applies the D-term filter to the rate PIDs if the `FILTER_D` flag is true.
 
+---
+## 7.0 CHANGE LOG & UPDATES (Blimp Adaptation)
+
+### 7.1. Full 270-Degree Vectoring Range
+*   **Modification:** The physical angle limit constant `MAX_TARGET_ANGLE_DEG` in `TVC_Core.h` was updated from **89.0** to **180.0**.
+*   **Reason:** The original limit clamped the servo output, preventing the vectoring mechanism from pointing downwards (180°). This change allows the full 270° range (-90° Back to +180° Down).
+*   **Behavior:**
+    *   **Forward Stick (90°):** Maps to Horizontal Forward.
+    *   **Reverse Throttle (180°):** Maps to Vertical Down.
+
+### 7.2. Bidirectional Throttle Logic
+*   **Input Mapping:** The `QuadPlane::get_pilot_throttle` function was modified to bypass the expo curve for the Blimp, passing a linear 0..1 signal.
+*   **Internal Processing:** `AP_Motors6DOF` uses `get_throttle_bidirectional()` to map the 0..1 input (where 0 is Low Stick) to a -1..1 command (where -1 is Low Stick).
+*   **Spool Logic Fix:** The `AP_MotorsMulticopter` spool logic was updated to use the **absolute magnitude** (`fabsf`) of the bidirectional throttle. This prevents the motors from cutting off (going to Idle) when the throttle stick is at minimum (-1.0 Thrust), ensuring they spin at full power for reverse vectoring.
+*   **Low-Throttle Idle Fix:** `QuadPlane::hold_stabilize` was updated to bypass the `GROUND_IDLE` enforcement at zero throttle for reversible setups, allowing `THROTTLE_UNLIMITED` state even at minimum stick.
+
+### 7.3. Unidirectional Motor Support for Reversible Thrust
+*   **Concept:** "Reverse Thrust" for this airframe means "Spin Motors + Point Down", not "Spin Motors Backwards".
+*   **Implementation:** `AP_Motors6DOF` was updated to pass the **absolute value** of the calculated thrust to the Lift Motors.
+    *   **Command -1 (Reverse):** Motors receive `abs(-1) = 1` (Full Power). TVC receives `-1` (Tilt Down).
+    *   **Command +1 (Forward):** Motors receive `abs(+1) = 1` (Full Power). TVC receives `+1` (Tilt Up).
+
+### 7.4. Manual Override Configuration
+*   **Channel:** Re-mapped to **RC8** (Channel 8).
+*   **Threshold:** Active when PWM > **1200**.
+*   **Logic:** Updated to use the same **Trim-Centric** PWM mapping as the auto mode, ensuring consistent behavior where neutral stick equals neutral servo trim.
+*   **Direction:** Manual pitch input is inverted in code to align "Stick Forward" with "Tilt Forward".
+

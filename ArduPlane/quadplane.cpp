@@ -1026,6 +1026,12 @@ void QuadPlane::hold_stabilize(float throttle_in)
             // tailsitters in forward flight should not use angle boost
             should_boost = false;
         }
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+        if (TRICOPTER_IS_BLIMP) {
+            // blimps tilt motors to stay vertical, no loss of vertical lift
+            should_boost = false;
+        }
+#endif
         attitude_control->set_throttle_out(throttle_in, should_boost, 0);
     }
 }

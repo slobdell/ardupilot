@@ -573,9 +573,7 @@ void AP_Motors6DOF::output_to_motors()
             if (motor_enabled[i]) {
 #if ENABLE_TRICOPTER_VTOL_BACKEND
                 if (TRICOPTER_IS_BLIMP) {
-                    if (i == BLIMP_MOT_RUDDER || i == BLIMP_MOT_TILT) { // Servos
-                        motor_out[i] = MOT_SPIN_NEUTRAL;
-                    } else if (i == BLIMP_MOT_YAW) { // Reversible Tail Motor
+                    if (i == BLIMP_MOT_RUDDER || i == BLIMP_MOT_TILT || i == BLIMP_MOT_YAW) { // Servos & Yaw
                         motor_out[i] = MOT_SPIN_NEUTRAL;
                     } else { // Lift (1,2) and Debug (6)
                         motor_out[i] = MOT_SPIN_MIN;
@@ -625,15 +623,6 @@ void AP_Motors6DOF::output_to_motors()
                                                                                                                                                                 float thrust = _tilt_angle;
                                                                                                                                                                 if (chan->get_reversed()) {
                                                                                                                                                                     thrust = -thrust;
-                                                                                                                                                                }
-                                                                                                                                                                
-                                                                                                                                                                // SBL DEBUG: Log reversal status
-                                                                                                                                                                static uint32_t last_log_ms = 0;
-                                                                                                                                                                uint32_t now = AP_HAL::millis();
-                                                                                                                                                                if (now - last_log_ms > 1000) {
-                                                                                                                                                                    last_log_ms = now;
-                                                                                                                                                                    gcs().send_text(MAV_SEVERITY_INFO, "SBL_SRV: Rev:%d TltIn:%.2f TltOut:%.2f", 
-                                                                                                                                                                                    (int)chan->get_reversed(), (double)_tilt_angle, (double)thrust);
                                                                                                                                                                 }
                                                                                                         
                                                                                                                                                                 int16_t pwm;
@@ -745,15 +734,6 @@ void AP_Motors6DOF::output_armed_stabilizing()
         yaw_thrust = (_yaw_in + _yaw_in_ff);
         if(LIFTING_MOTORS_REVERSIBLE || TRICOPTER_IS_BLIMP) {
             throttle_thrust = get_throttle_bidirectional();
-            
-            // SBL DEBUG: Verify we are in the bidirectional block
-            static uint32_t last_log_ms = 0;
-            uint32_t now = AP_HAL::millis();
-            if (now - last_log_ms > 1000) {
-                last_log_ms = now;
-                gcs().send_text(MAV_SEVERITY_INFO, "SBL_BIDI: Entered Bidirectional Block. Val: %.2f", (double)throttle_thrust);
-            }
-
         } else {
             float compensation_gain = 1.0;
             // thrust linearization accounted for on the end motor controller
@@ -865,18 +845,6 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     // Override Throttle with Total Vector Magnitude (Motors 1 & 2)
                     throttle_thrust = tvc_outputs.total_throttle;
 
-                    // SBL DEBUG: Inspect TVC Internals
-                    static uint32_t last_debug_ms = 0;
-                    uint32_t now = AP_HAL::millis();
-                    if (now - last_debug_ms > 1000) {
-                        last_debug_ms = now;
-                        gcs().send_text(MAV_SEVERITY_INFO, "TVC_DBG: FwdCmd:%.2f ThrCmd:%.2f TgtDeg:%.1f Out:%.2f", 
-                                        (double)tvc_outputs.debug_data.forward_cmd,
-                                        (double)tvc_outputs.debug_data.thrust_cmd,
-                                        (double)tvc_outputs.debug_data.target_pitch_deg,
-                                        (double)tvc_outputs.debug_data.vector_pitch_out);
-                    }
-            
                     // --- VTOL State Broadcasting ---
                     // Scale the 0-1 progress to a 1000-2000us PWM value.
                     uint16_t transition_pwm = 1000 + (uint16_t)(_vtol_transition_progress * 1000.0f);
@@ -886,17 +854,6 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     _thrust_rpyt_out[SBUS_OUTPUT_PLANE_THROTTLE_CHAN] = pwm_to_thrust_float(_vtol_plane_throttle);
                 }
             #endif
-
-        // SBL DEBUG (Combined)
-        static uint32_t last_debug_ms = 0;
-        uint32_t now = AP_HAL::millis();
-        if (now - last_debug_ms > 1000) {
-            last_debug_ms = now;
-            gcs().send_text(MAV_SEVERITY_INFO, "SBL: Tlt:%.2f Prg:%.2f Fwd:%.2f Thr:%.2f",
-                            (double)_tilt_angle, (double)_vtol_transition_progress, (double)forward_thrust, (double)throttle_thrust);
-            gcs().send_text(MAV_SEVERITY_INFO, "SBL_IN: FwdIn:%.2f LatIn:%.2f ThrIn:%.2f", 
-                            (double)_forward_in, (double)_lateral_in, (double)throttle_thrust);
-        }
 
         float rpy_out[AP_MOTORS_MAX_NUM_MOTORS]; // buffer so we don't have to multiply coefficients multiple times.
         float linear_out[AP_MOTORS_MAX_NUM_MOTORS]; // 3 linear DOF mix for each motor

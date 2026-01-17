@@ -169,8 +169,10 @@ This aircraft operates exclusively in VTOL (Quad) modes.
 *   **`MOT_PWM_TYPE`**: **5** (DShot300).
 *   **`SERVO_BLH_AUTO`**: **0** (Disabled - rely on manual mask for hybrid PWM/DShot).
 *   **`SERVO_BLH_MASK`**: **15** (Enables DShot for pins 1, 2, 3, 4).
+*   **`SERVO_BLH_3DMASK`**: **4** (or **8** depending on mapping).
+    *   *Critical:* This mask must include the channel for the **Tail Motor (3D)**. It tells ArduPilot to use 3D DShot command encoding (where 1500 PWM = Stop). Without this, the 3D ESC will not arm or spin correctly on DShot.
 *   **`SERVO_BLH_OTYPE`**: **5** (Explicitly set to DShot300 for AM32/BLHeli).
-*   **`SERVO_BLH_BDMASK`**: **4** (Enable Bidirectional DShot for Pin 3 ONLY).
+*   **`SERVO_BLH_BDMASK`**: **0** (Disable Bidirectional DShot unless RPM filtering is needed).
 
 ### 5.5. PID Tuning (Blimp Specifics)
 *   `Q_A_RAT_RLL_P`, `Q_A_RAT_PIT_P`, `Q_A_RAT_YAW_P`: **0.05** (Start very low).
