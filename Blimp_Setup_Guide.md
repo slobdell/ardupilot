@@ -160,10 +160,14 @@ This aircraft operates exclusively in VTOL (Quad) modes.
 *   `SERVO3_FUNCTION`: **0** (Disabled)
 *   `SERVO4_FUNCTION`: **0** (Disabled)
 *   `SERVO5_FUNCTION`: **38** (Motor 6) -> Rudder Servo
-*   `SERVO6_FUNCTION`: **37** (Motor 5) -> Tilt Servo
-*   `SERVO7_FUNCTION`: **39** (Motor 7? No, our debug motor is indexed as Motor 6 in the code layout we built).
-    *   In the code: `BLIMP_MOT_DEBUG = 5` (which is Motor 6).
-    *   So: **`SERVO7_FUNCTION` = 38 (Motor 6 - Debug)**.
+*   `SERVO6_FUNCTION`: **95** (Scripting2) -> Tilt Servo
+*   `SERVO7_FUNCTION`: **0** (Disabled).
+
+**Critical Plane Logic Mapping (Dummy Outputs):**
+You **MUST** assign these functions to unused servo channels (e.g. 13, 14, 15) to ensure ArduPlane calculates their values for the mixer, even if you don't plug anything into them.
+*   `SERVO13_FUNCTION`: **21** (Rudder)
+*   `SERVO14_FUNCTION`: **19** (Elevator)
+*   `SERVO15_FUNCTION`: **70** (Throttle)
 
 ### 5.4. ESC & DShot (MicoAir743)
 *   **`MOT_PWM_TYPE`**: **5** (DShot300).

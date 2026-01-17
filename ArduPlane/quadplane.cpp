@@ -1717,6 +1717,26 @@ void QuadPlane::update(void)
     // keep motors interlock state upto date with E-stop
     motors->set_interlock(!SRV_Channels::get_emergency_stop());
 
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    // Inject Plane Demands for Unified Mixing (Run Unconditionally)
+    if (TRICOPTER_IS_BLIMP) {
+        AP_Motors6DOF::PlaneInputs plane_inputs;
+        plane_inputs.pitch_cd = plane.nav_pitch_cd;
+        plane_inputs.roll_cd = plane.nav_roll_cd;
+        
+        // We must calculate throttle percent manually since we are running before servos_output
+        plane_inputs.throttle_pct = SRV_Channels::get_output_scaled(SRV_Channel::k_throttle);
+        
+        plane_inputs.rudder_input = SRV_Channels::get_output_scaled(SRV_Channel::k_rudder);
+        plane_inputs.aileron_input = SRV_Channels::get_output_scaled(SRV_Channel::k_aileron);
+        plane_inputs.elevator_input = SRV_Channels::get_output_scaled(SRV_Channel::k_elevator);
+        
+        // SBL: Force binary transition state based on mode for reliable testing
+        plane_inputs.transition_progress = in_vtol_mode() ? 0.0f : 1.0f; 
+        ((AP_Motors6DOF*)motors)->set_plane_inputs(plane_inputs);
+    }
+#endif
+
     if ((ahrs_view != NULL) && !is_equal(_last_ahrs_trim_pitch, ahrs_trim_pitch.get())) {
         _last_ahrs_trim_pitch = ahrs_trim_pitch.get();
         ahrs_view->set_pitch_trim(_last_ahrs_trim_pitch);
@@ -1763,7 +1783,14 @@ void QuadPlane::update(void)
             plane.control_mode == &plane.mode_training) {
             // in manual modes quad motors are always off
             if (!tailsitter.enabled()) {
-                set_desired_spool_state(AP_Motors::DesiredSpoolState::SHUT_DOWN);
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+                if (TRICOPTER_IS_BLIMP) {
+                     set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
+                } else 
+#endif
+                {
+                    set_desired_spool_state(AP_Motors::DesiredSpoolState::SHUT_DOWN);
+                }
                 motors->output();
             }
             transition->force_transition_complete();
@@ -1776,18 +1803,10 @@ void QuadPlane::update(void)
 
         assisted_flight = in_vtol_airbrake();
 
-#if ENABLE_TRICOPTER_VTOL_BACKEND
-        // pass transition state to motors library
-        float transition_progress = 1.0f - ((SLT_Transition*)transition)->transition_mix;
-        int16_t plane_throttle_scaled = SRV_Channels::get_output_scaled(SRV_Channel::k_throttle);
-        ((AP_Motors6DOF*)motors)->set_vtol_state(transition_progress, plane_throttle_scaled);
-#endif
-
         // output to motors
         motors_output();
 
         transition->VTOL_update();
-
     }
 
     // disable throttle_wait when throttle rises above 10%

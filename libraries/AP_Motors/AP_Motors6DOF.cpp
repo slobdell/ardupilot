@@ -536,7 +536,7 @@ void AP_Motors6DOF::output_to_motors()
                     }
                 } else {
                     if(i < 4) {
-                      if(LIFTING_MOTORS_REVERSIBLE || i == BLIMP_MOT_YAW) {
+                      if(LIFTING_MOTORS_REVERSIBLE) {
                         motor_out[i] = MOT_SPIN_NEUTRAL;
                       } else {
                         motor_out[i] = MOT_SPIN_MIN;
@@ -568,10 +568,10 @@ void AP_Motors6DOF::output_to_motors()
     case SpoolState::SPOOLING_DOWN:
         // set motor output based on thrust requests
         for (i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) {
-                        if (motor_enabled[i]) {
+            if (motor_enabled[i]) {
             #if ENABLE_TRICOPTER_VTOL_BACKEND
-                                            if (TRICOPTER_IS_BLIMP) {
-                                                if (i == BLIMP_MOT_TILT) { 
+                if (TRICOPTER_IS_BLIMP) {
+                    if (i == BLIMP_MOT_TILT) { 
                                                     // Motor 5: Tilt Servo (SRV_Channel Interpolation)
                                                     SRV_Channel::Aux_servo_function_t func = SRV_Channels::get_motor_function(i);
                                                                                                                                                             const SRV_Channel *chan = SRV_Channels::get_channel_for(func);
@@ -793,17 +793,54 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     tvc_inputs.rc_in[THRUST_CHANNEL] = f2pwm(throttle_thrust, -1.0f, 1.0f);
                     tvc_inputs.rc_in[FORWARD_CHANNEL] = f2pwm(forward_thrust, -1.0f, 1.0f);
                     tvc_inputs.rc_in[LATERAL_CHANNEL] = f2pwm(lateral_thrust, -1.0f, 1.0f);
-                    tvc_inputs.rc_in[TRANSITION_PROGRESS_CHANNEL] = f2pwm(_vtol_transition_progress, 0.0f, 1.0f);
+                    tvc_inputs.rc_in[TRANSITION_PROGRESS_CHANNEL] = f2pwm(_plane_inputs.transition_progress, 0.0f, 1.0f);
                     
                     // Run TVC Logic
                     TVC_Outputs tvc_outputs = tvc_run_main_logic(tvc_inputs, tvc_state, tvc_config);
 
-                    // Map TVC Output (Pitch) to _tilt_angle
-                    // Direct float assignment (No un-packing)
-                    _tilt_angle = tvc_outputs.pitch_angle_norm;
+                    if (TRICOPTER_IS_BLIMP && _plane_inputs.transition_progress > 0.5f) {
+                        // --- PLANE MODE MAPPING ---
+                        // 1. Throttle -> Lift Motors (0..100 -> 0..1.0)
+                        throttle_thrust = _plane_inputs.throttle_pct * 0.01f;
+                        
+                        // 2. Yaw -> Tail Motor & Rudder Servo (-4500..4500 -> -1.0..1.0)
+                        yaw_thrust = _plane_inputs.rudder_input / 4500.0f;
+                        
+                        // 3. Pitch -> Tilt Servo (Piecewise Mapping centered on 90 deg Forward)
+                        // Assumes _tilt_angle: 0.0=Up, 0.5=Forward(90), 1.0=Down(180)
+                        float elev = _plane_inputs.elevator_input;
+                        
+                        if (elev >= 0) {
+                            // Stick Back (Pitch Up): Map 0..4500 to 0.5..-0.5 (Forward to Reverse)
+                            // 0 -> 0.5 (Fwd). 2250 -> 0.0 (Up). 4500 -> -0.5 (Reverse -45 deg).
+                            // Wait, you wanted -90 Back. That would be -0.5.
+                            _tilt_angle = 0.5f - (elev / 4500.0f) * 1.0f; 
+                        } else {
+                            // Stick Forward (Pitch Down): Map 0..-4500 to 0.5..1.0 (Forward to Down)
+                            _tilt_angle = 0.5f + (fabsf(elev) / 4500.0f) * 0.5f;
+                        }
 
-                    // Override Throttle with Total Vector Magnitude (Motors 1 & 2)
-                    throttle_thrust = tvc_outputs.total_throttle;
+                        // Disable differential motor stabilization in Plane mode for now
+                        roll_thrust = 0.0f;
+                        pitch_thrust = 0.0f;
+
+                    } else {
+                        // --- COPTER MODE MAPPING ---
+                        // Map TVC Output (Pitch) to _tilt_angle
+                        _tilt_angle = tvc_outputs.pitch_angle_norm;
+
+                        // Override Throttle with Total Vector Magnitude (Motors 1 & 2)
+                        throttle_thrust = tvc_outputs.total_throttle;
+                    }
+
+                    // Debug Plane Inputs (Verification Only)
+                    static uint32_t last_trans_log = 0;
+                    if (AP_HAL::millis() - last_trans_log > 1000) {
+                        last_trans_log = AP_HAL::millis();
+                        gcs().send_text(MAV_SEVERITY_INFO, "PLANE_IN: P:%.0f T:%.0f R:%.0f Tr:%.1f", 
+                                        (double)_plane_inputs.elevator_input, (double)_plane_inputs.throttle_pct, 
+                                        (double)_plane_inputs.rudder_input, (double)_plane_inputs.transition_progress);
+                    }
 
                     if (TRICOPTER_IS_BLIMP) {
                         // --- Slew Limiter & Transient Thrust Mitigation ---
@@ -829,11 +866,12 @@ void AP_Motors6DOF::output_armed_stabilizing()
 
                     // --- VTOL State Broadcasting ---
                     // Scale the 0-1 progress to a 1000-2000us PWM value.
-                    uint16_t transition_pwm = 1000 + (uint16_t)(_vtol_transition_progress * 1000.0f);
+                    uint16_t transition_pwm = 1000 + (uint16_t)(_plane_inputs.transition_progress * 1000.0f);
             
                     // Place the state values into the SBUS output array on their designated channels.
                     _thrust_rpyt_out[SBUS_OUTPUT_TRANSITION_PROGRESS_CHAN] = pwm_to_thrust_float(transition_pwm);
-                    _thrust_rpyt_out[SBUS_OUTPUT_PLANE_THROTTLE_CHAN] = pwm_to_thrust_float(_vtol_plane_throttle);
+                    // Map 0..100% throttle to 1000..2000 PWM for debug output
+                    _thrust_rpyt_out[SBUS_OUTPUT_PLANE_THROTTLE_CHAN] = pwm_to_thrust_float(1000 + (int16_t)_plane_inputs.throttle_pct * 10);
                 }
             #endif
 
@@ -868,11 +906,17 @@ void AP_Motors6DOF::output_armed_stabilizing()
         // SBL hard-coded
         // This is to elminate motor saturation. Max forward_in is 0.5,
         // so limiting to 0.5 prevents some motors getting saturated while others are not.
-        if(yaw_thrust > 0.5) {
-            yaw_thrust = 0.5;
+        float yaw_limit = 0.5f;
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+        if (TRICOPTER_IS_BLIMP) {
+            yaw_limit = 1.0f;
+        }
+#endif
+        if(yaw_thrust > yaw_limit) {
+            yaw_thrust = yaw_limit;
             limit.yaw = true;
-        } else if (yaw_thrust < -0.5) {
-            yaw_thrust = -0.5;
+        } else if (yaw_thrust < -yaw_limit) {
+            yaw_thrust = -yaw_limit;
             limit.yaw = true;
         }
 
