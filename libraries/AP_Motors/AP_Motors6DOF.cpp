@@ -72,9 +72,12 @@ static TVC_State tvc_state = {
 #define BLIMP_MOT_LIFT_RIGHT 0 // Motor 1
 #define BLIMP_MOT_LIFT_LEFT  1 // Motor 2
 #define BLIMP_MOT_YAW        2 // Motor 3 (Tail Motor)
-#define BLIMP_MOT_RUDDER     3 // Motor 4 (Rudder Servo)
-#define BLIMP_MOT_TILT       4 // Motor 5 (Tilt Servo)
-#define BLIMP_MOT_DEBUG      5 // Motor 6 (Debug Thrust)
+#define BLIMP_MOT_RUDDER     3 // Motor 4 (Rudder Servo - Virtual)
+#define BLIMP_MOT_TILT       4 // Motor 5 (Tilt Servo - Virtual)
+
+// --- Blimp Output Function Mappings ---
+#define BLIMP_TILT_SERVO_FUNC   SRV_Channel::k_scripting2 // Function 95
+#define BLIMP_RUDDER_SERVO_FUNC SRV_Channel::k_scripting3 // Function 96
 
 // convert PWM to a float in the range -1 to 1
 static float pwm_to_thrust_float(int16_t pwm)
@@ -225,7 +228,7 @@ bool AP_Motors6DOF::init(uint8_t expected_num_motors) {
       wantMotors = 9;
     }
     if (ENABLE_TRICOPTER_VTOL_BACKEND) {
-      wantMotors = TRICOPTER_IS_BLIMP ? 6 : 5;
+      wantMotors = TRICOPTER_IS_BLIMP ? 3 : 5;
     }
     uint8_t num_motors = 0;
     for(uint8_t i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
@@ -272,15 +275,6 @@ void AP_Motors6DOF::setup_motors(motor_frame_class frame_class, motor_frame_type
         
         // Motor 3: Tail Yaw Motor (Bidirectional DShot)
         add_motor_raw_6dof(AP_MOTORS_MOT_3,  noInput,  noInput, yawFactor, 0.0f, noInput, noInput, 3);
-        
-        // Motor 4: Rudder Servo (PWM) - Duplicate of Yaw
-        add_motor_raw_6dof(AP_MOTORS_MOT_4,  noInput,  noInput, yawFactor, 0.0f, noInput, noInput, 4);
-        
-        // Motor 5: Tilt Servos (PWM) - Driven by TVC Angle (Hardcoded to _tilt_angle)
-        add_motor_raw_6dof(AP_MOTORS_MOT_5,  noInput,  noInput, noInput, 0.0f, noInput, noInput, 5);
-        
-        // Motor 6: Forward Thrust Debug (DShot) - Driven manually in output_armed
-        add_motor_raw_6dof(AP_MOTORS_MOT_6,  noInput,  noInput, noInput, 0.0f, noInput, noInput, 6);
 
     } else {
         // --- STANDARD TRICOPTER CONFIGURATION ---
@@ -487,56 +481,18 @@ void AP_Motors6DOF::add_motor_raw_6dof(int8_t motor_num, float roll_fac, float p
 // output_min - sends minimum values out to the motors
 void AP_Motors6DOF::output_min()
 {
-    int8_t i;
-
-    // set limits flags
+    // Ensure spool state is SHUT_DOWN
+    _spool_state = SpoolState::SHUT_DOWN;
+    
+    // reset limits flags
     limit.roll = true;
     limit.pitch = true;
     limit.yaw = true;
     limit.throttle_lower = false;
     limit.throttle_upper = false;
 
-    // fill the motor_out[] array for HIL use and send minimum value to each motor
-    // ToDo find a field to store the minimum pwm instead of hard coding 1500
-    // SBL redundant code
-    // NOTE rc_write() usage vs motor_out[i] = ; this tripped me up earlier
-    for (i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) {
-        if (motor_enabled[i]) {
-#if ENABLE_TRICOPTER_VTOL_BACKEND
-            if (TRICOPTER_IS_BLIMP) {
-                if (i == BLIMP_MOT_RUDDER || i == BLIMP_MOT_TILT || i == BLIMP_MOT_YAW) {
-                    rc_write(i, MOT_SPIN_NEUTRAL);
-                } else {
-                    rc_write(i, MOT_SPIN_MIN);
-                }
-            } else {
-                if(i < 4) {
-                  if(LIFTING_MOTORS_REVERSIBLE) {
-                    rc_write(i, MOT_SPIN_NEUTRAL);
-                  } else {
-                    rc_write(i, MOT_SPIN_MIN);
-                  }
-                } else {
-                  rc_write(i, MOT_SPIN_NEUTRAL); // Tilt Servo
-                }
-            }
-#else
-            if(i < 4) {
-              if(LIFTING_MOTORS_REVERSIBLE) {
-                rc_write(i, MOT_SPIN_NEUTRAL);
-              } else {
-                rc_write(i, MOT_SPIN_MIN);
-              }
-            } else {
-              if(LATERAL_MOTORS_CONFIG4) {
-                rc_write(i, MOT_SPIN_NEUTRAL);
-              } else {
-                rc_write(i, MOT_SPIN_MIN);
-              }
-            }
-#endif
-        }
-    }
+    // Delegate to unified output function
+    output_to_motors();
 }
 
 int16_t AP_Motors6DOF::calc_thrust_to_pwm(float thrust_in, bool reversible) const
@@ -648,9 +604,6 @@ void AP_Motors6DOF::output_to_motors()
                                                                                     motor_out[i] = 1500; 
                                                                                 }                                                } else if (i == BLIMP_MOT_YAW || i == BLIMP_MOT_RUDDER) {                                    // Motor 3: Yaw Motor, Motor 4: Rudder Servo (Reversible)
                                     motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], true);
-                                } else if (i == BLIMP_MOT_DEBUG) {
-                                    // Motor 6: Forward Debug (Non-Reversible DShot)
-                                    motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], false);
                                 } else {
                                     // Lift Motors 1 & 2 (Unidirectional, rely on Vectoring for direction)
                                     // Pass absolute magnitude so they spin up for negative (downward) thrust
@@ -698,6 +651,23 @@ void AP_Motors6DOF::output_to_motors()
             rc_write(i, motor_out[i]);
         }
     }
+
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    if (TRICOPTER_IS_BLIMP) {
+        if (_spool_state == SpoolState::SHUT_DOWN) {
+            _tilt_angle = 0.0f;
+            _current_tilt_deg = 0.0f;
+        }
+
+        // Output Tilt Servo (Mapped from _tilt_angle)
+        SRV_Channels::set_output_scaled(BLIMP_TILT_SERVO_FUNC, _tilt_angle * 4500.0f);
+
+        // Output Rudder Servo (Mapped from Yaw Thrust calculation)
+        if (motor_enabled[BLIMP_MOT_YAW]) {
+             SRV_Channels::set_output_scaled(BLIMP_RUDDER_SERVO_FUNC, _thrust_rpyt_out[BLIMP_MOT_YAW] * 4500.0f);
+        }
+    }
+#endif
 }
 
 float AP_Motors6DOF::get_current_limit_max_throttle()
@@ -787,10 +757,6 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     roll_thrust = 0.0f;
                     lateral_thrust = 0.0f;
 
-                    if (TRICOPTER_IS_BLIMP) {
-                         _thrust_rpyt_out[BLIMP_MOT_DEBUG] = forward_thrust;
-                    }
-
                 } else {
                     _manual_override_active = false;
                     
@@ -831,12 +797,6 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     
                     // Run TVC Logic
                     TVC_Outputs tvc_outputs = tvc_run_main_logic(tvc_inputs, tvc_state, tvc_config);
-
-                    if (TRICOPTER_IS_BLIMP) {
-                        // For Blimp, we want Motor 6 to reflect the RAW forward stick input for debugging.
-                        // We must set this BEFORE we override forward_thrust for the tilt servo.
-                        _thrust_rpyt_out[BLIMP_MOT_DEBUG] = forward_thrust; 
-                    }
 
                     // Map TVC Output (Pitch) to _tilt_angle
                     // Direct float assignment (No un-packing)

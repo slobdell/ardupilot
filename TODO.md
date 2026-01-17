@@ -9,10 +9,18 @@
 - [ ] **Range Finder:** Verify the hardware connection for the range finder and ensure distance data is being read correctly in the GCS.
 
 ## Software Refactoring
-- [ ] **Output Function Mapping:** Rename/Refactor motor outputs to use standard Servo Functions (e.g., `k_scripting1`, `k_yaw`) where appropriate. This is necessary to prepare for sharing actuators with the QuadPlane/Plane code without function conflicts.
+- [x] **Output Function Mapping:** Servos refactored to `k_scripting2/3`. Motor count reduced to 3.
 
 ## Safety & Control Logic
-- [x] **Transient Thrust Limiting (Emergency Descent):**
+- [x] **Transient Thrust Limiting:** Implemented via "Virtual Servo" slew estimation and cosine-based throttle scaling. Includes disarmed state reset for safe arming.
+
+## Hardware & ESC Debugging
+- [x] **Tail Motor Consistency:** 3D DShot working with `SERVO_BLH_3DMASK`.
+- [ ] **Lift Motor Sync:** Investigate uneven speeds on Motors 1 and 2.
+- [ ] **Range Finder:** Wire and verify Benewake TF02-Pro.
+
+## QuadPlane Integration
+- [ ] **Core Adaptation:** TECS floor removal, 0 airspeed takeoff, airspeed min = 0.
     *   *Problem:* Commanding full down (-1.0) causes motors to spin to 100% immediately while servos are still rotating from Up/Forward to Down (180°). This results in a transient burst of wrong-way thrust.
     *   *Goal:* Clip/Limit throttle output based on the servo's *actual* (or estimated) position relative to the target vector. Only allow full power once the vector is aligned.
     *   *Solution (Verified):* Implement a "Virtual Servo" model in `AP_Motors6DOF` similar to `Tiltrotor::slew`.
