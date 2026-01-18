@@ -6,7 +6,10 @@
 #define SERVO_MAX 4500.0  // This value represents 45 degrees and is just an
                         // arbitrary representation of servo max travel.
 
-#define MIN_AIRSPEED_MIN 5 // m/s, used for arming check and speed scaling
+// mark a function as not to be inlined
+#define NOINLINE __attribute__((noinline))
+
+#define MIN_AIRSPEED_MIN 0 // m/s, used for arming check and speed scaling
 
 #define TAKEOFF_RUDDER_WARNING_TIMEOUT 3000 //ms that GCS warning about not returning arming rudder to neutral repeats
 

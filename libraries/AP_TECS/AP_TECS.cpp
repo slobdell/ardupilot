@@ -1,6 +1,6 @@
 #include "AP_TECS.h"
-
 #include <AP_HAL/AP_HAL.h>
+#include "../../ArduCopter/custom_config.h"
 #include <AP_Baro/AP_Baro.h>
 #include <AP_Logger/AP_Logger.h>
 #include <AP_Landing/AP_Landing.h>
@@ -400,12 +400,12 @@ void AP_TECS::_update_speed(float DT)
     } else if (_thr_clip_status == clipStatus::MAX) {
         // wind down airspeed upper limit  to prevent a situation where the aircraft can't climb
         // at the maximum speed
-        const float velRateMin = 0.5f * _STEdot_min / MAX(_TAS_state, aparm.airspeed_min * EAS2TAS);
+        const float velRateMin = 0.5f * _STEdot_min / MAX(_TAS_state, MAX(aparm.airspeed_min * EAS2TAS, 0.1f));
         _TASmax += _DT * velRateMin;
         _TASmax = MAX(_TASmax, aparm.airspeed_cruise * EAS2TAS);
     } else {
         // wind airspeed upper limit back to parameter defined value
-        const float velRateMax = 0.5f * _STEdot_max / MAX(_TAS_state, aparm.airspeed_min * EAS2TAS);
+        const float velRateMax = 0.5f * _STEdot_max / MAX(_TAS_state, MAX(aparm.airspeed_min * EAS2TAS, 0.1f));
         _TASmax += _DT * velRateMax;
     }
     _TASmax   = MIN(_TASmax, aparm.airspeed_max * EAS2TAS);
@@ -436,7 +436,12 @@ void AP_TECS::_update_speed(float DT)
     }
 
     // limit the airspeed to a minimum of 3 m/s
-    const float min_airspeed = 3.0;
+    float min_airspeed = 3.0;
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    if (TRICOPTER_IS_BLIMP) {
+        min_airspeed = 0.0f;
+    }
+#endif
 
     // Reset states of time since last update is too large
     if (_flags.reset) {
@@ -452,7 +457,7 @@ void AP_TECS::_update_speed(float DT)
     float aspdErr = (_EAS * EAS2TAS) - _TAS_state;
     float integDTAS_input = aspdErr * _spdCompFiltOmega * _spdCompFiltOmega;
     // Prevent state from winding up
-    if (_TAS_state < 3.1f) {
+    if (_TAS_state < (min_airspeed + 0.1f)) {
         integDTAS_input = MAX(integDTAS_input, 0.0f);
     }
     _integDTAS_state = _integDTAS_state + integDTAS_input * DT;
@@ -482,14 +487,18 @@ void AP_TECS::_update_speed_demand(void)
     _TAS_dem = constrain_float(_TAS_dem, _TASmin, _TASmax);
 
     // Determine the true cruising airspeed (m/s)
-    const float TAScruise = aparm.airspeed_cruise * _ahrs.get_EAS2TAS();
+    const float TAScruise = MAX(aparm.airspeed_cruise * _ahrs.get_EAS2TAS(), 0.1f);
 
     // calculate velocity rate limits based on physical performance limits
     // provision to use a different rate limit if bad descent or underspeed condition exists
     // Use 50% of maximum energy rate on gain, 90% on dissipation to allow margin for total energy controller
-    const float velRateMax = 0.5f * _STEdot_max / _TAS_state;
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    const float velRateMax = 0.5f * _STEdot_max / MAX(_TAS_state, 0.1f);
+#else
+    const float velRateMax = 0.5f * _STEdot_max / MAX(_TAS_state, 0.1f);
+#endif
     // Maximum permissible rate of deceleration value at max airspeed
-    const float velRateNegMax = 0.9f * _STEdot_neg_max / _TASmax;
+    const float velRateNegMax = 0.9f * _STEdot_neg_max / MAX(_TASmax, 0.1f);
     // Maximum permissible rate of deceleration value at cruise speed
     const float velRateNegCruise = 0.9f * _STEdot_min / TAScruise;
     // Linear interpolation between velocity rate at cruise and max speeds, capped at those speeds
@@ -550,7 +559,7 @@ void AP_TECS::_update_height_demand(void)
         } else {
             const float numerator = hgt_dem - _hgt_dem_rate_ltd;
             const float denominator = - _sink_rate_limit * _DT;
-            if (is_negative(numerator) && is_negative(denominator)) {
+            if (is_negative(numerator) && is_negative(denominator) && !is_zero(denominator)) {
                 _sink_fraction = numerator / denominator;
             } else {
                 _sink_fraction = 0.0f;
@@ -744,7 +753,7 @@ void AP_TECS::_update_throttle_with_airspeed(void)
         _throttle_dem = 0.0f;
     } else {
         // Calculate gain scaler from specific energy error to throttle
-        const float K_thr2STE = (_STEdot_max - _STEdot_min) / (_THRmaxf - _THRminf); // This is the derivative of STEdot wrt throttle measured across the max allowed throttle range.
+        const float K_thr2STE = MAX(_STEdot_max - _STEdot_min, 0.1f) / MAX(_THRmaxf - _THRminf, 0.01f); // This is the derivative of STEdot wrt throttle measured across the max allowed throttle range.
         const float K_STE2Thr = 1 / (timeConstant() * K_thr2STE);
 
         // Calculate feed-forward throttle
@@ -886,11 +895,11 @@ void AP_TECS::_update_throttle_without_airspeed(int16_t throttle_nudge, float pi
 
     if (pitch_blended > 0.0f && _PITCHmaxf > 0.0f)
     {
-        _throttle_dem = nomThr + (_THRmaxf - nomThr) * pitch_blended / _PITCHmaxf;
+        _throttle_dem = nomThr + (_THRmaxf - nomThr) * pitch_blended / MAX(_PITCHmaxf, 0.01f);
     }
     else if (pitch_blended < 0.0f && _PITCHminf < 0.0f)
     {
-        _throttle_dem = nomThr + (_THRminf - nomThr) * pitch_blended / _PITCHminf;
+        _throttle_dem = nomThr + (_THRminf - nomThr) * pitch_blended / MIN(_PITCHminf, -0.01f);
     }
     else
     {
@@ -909,7 +918,7 @@ void AP_TECS::_update_throttle_without_airspeed(int16_t throttle_nudge, float pi
     // drag increase during turns.
     const float cosPhi_squared = (rotMat.a.y*rotMat.a.y) + (rotMat.b.y*rotMat.b.y);
     float STEdot_dem = _rollComp * (1.0f/constrain_float(cosPhi_squared, 0.1f, 1.0f) - 1.0f);
-    _throttle_dem = _throttle_dem + STEdot_dem / (_STEdot_max - _STEdot_min) * (_THRmaxf - _THRminf);
+    _throttle_dem = _throttle_dem + STEdot_dem / MAX(_STEdot_max - _STEdot_min, 0.1f) * (_THRmaxf - _THRminf);
 
     constrain_throttle();
 }
@@ -1061,7 +1070,7 @@ void AP_TECS::_update_pitch(void)
 
     // Rate limit the pitch demand to comply with specified vertical
     // acceleration limit
-    float ptchRateIncr = _DT * _vertAccLim / _TAS_state;
+    float ptchRateIncr = _DT * _vertAccLim / MAX(_TAS_state, 0.1f);
 
     if ((_pitch_dem - _last_pitch_dem) > ptchRateIncr) {
         _pitch_dem = _last_pitch_dem + ptchRateIncr;

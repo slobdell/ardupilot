@@ -208,6 +208,11 @@ Since the throttle stick controls negative thrust (down) when pulled back, you c
 *   **Pre-Arm Bypass:**
     *   Set `Q_ASSIST_SPEED` = **-1** (strictly required to disable the check).
 
+### 5.7. Airspeed Configuration (CRITICAL)
+For Blimp operation, especially in zero-airspeed hover or VTOL modes, you **MUST** allow the airspeed constraints to go to zero.
+*   **`AIRSPEED_MIN`**: Set to **0**.
+    *   *Why?* ArduPlane defaults this to 5 m/s or similar. If left at default, the TECS controller (speed/height) will think the aircraft is under-speeding when hovering and may apply aggressive pitch-down or throttle logic to "recover" airspeed, causing instability. Setting it to 0 tells the controller that hovering (0 m/s) is a valid flight state. This requires the custom firmware build where `MIN_AIRSPEED_MIN` constraint is removed.
+
 ## 6. Pre-Flight Verification
 
 1.  **Servo Setup:**

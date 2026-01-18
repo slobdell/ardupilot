@@ -15,7 +15,7 @@ float Plane::calc_speed_scaler(void)
         // ensure we have scaling over the full configured airspeed
         const float airspeed_min = MAX(aparm.airspeed_min, MIN_AIRSPEED_MIN);
         const float scale_min = MIN(0.5, g.scaling_speed / (2.0 * aparm.airspeed_max));
-        const float scale_max = MAX(2.0, g.scaling_speed / (0.7 * airspeed_min));
+        const float scale_max = MAX(2.0, g.scaling_speed / (0.7 * MAX(airspeed_min, 1.0f)));
         if (aspeed > 0.0001f) {
             speed_scaler = g.scaling_speed / aspeed;
         } else {

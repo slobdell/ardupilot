@@ -126,7 +126,7 @@ void ModeTakeoff::update()
               eventually trigger
              */
             if (!plane.throttle_suppressed &&
-                groundspeed > plane.aparm.airspeed_min*0.3) {
+                (groundspeed > plane.aparm.airspeed_min*0.3)) {
                 gcs().send_text(MAV_SEVERITY_INFO, "Takeoff to %.0fm for %.1fm heading %.1f deg",
                                 alt, dist, direction);
                 plane.takeoff_state.start_time_ms = millis();

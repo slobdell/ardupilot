@@ -555,7 +555,11 @@ void AP_Motors6DOF::output_to_motors()
              elev_cmd = (pitch_in > 0) ? 1.0f : -1.0f;
              
              // Map Remainder to Tilt Vectoring
-             float remainder = (abs_pitch - BLIMP_ELEVATOR_SPLIT) / (1.0f - BLIMP_ELEVATOR_SPLIT);
+             float remainder = 0.0f;
+             if (BLIMP_ELEVATOR_SPLIT < 0.999f) {
+                 remainder = (abs_pitch - BLIMP_ELEVATOR_SPLIT) / (1.0f - BLIMP_ELEVATOR_SPLIT);
+             }
+             
              if (pitch_in > 0) { 
                  // Stick Back: Map remainder 0..1 to Tilt 0..-1.0 (Reach -0.5 Back)
                  // If neutral is 0.5, we need to subtract 1.0 to reach -0.5.
