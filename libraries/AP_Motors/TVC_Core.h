@@ -3,6 +3,7 @@
 #include <stdint.h> // For uint32_t etc.
 #include <algorithm> // For std::min/max
 #include <cmath> // For M_PI
+#include "../../ArduCopter/custom_config.h"
 
 // SBUS PWM Value Ranges used by helper functions
 const int SBUS_MIN_PWM = 1000;
@@ -131,11 +132,6 @@ const float MAX_TARGET_ANGLE_DEG = 180.0f;
 const float MAX_SAFE_ANGLE_RAD = MAX_TARGET_ANGLE_DEG * (M_PI / 180.0);
 const float MAX_THRUST_FACTOR = 1.0f / cosf(MAX_SAFE_ANGLE_RAD);
 const float max_tan_angle = tanf(MAX_TARGET_ANGLE_DEG * M_PI / 180.0);
-
-// NEW: Physical angle limits for the system's full range of motion.
-// These define the maximum positive and negative physical tilt angles the system is designed to achieve.
-const float FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG = 180.0f; // Example: Max forward tilt for cruise
-const float REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG = -90.0f; // Example: Max reverse tilt
 
 // Deadband to prevent rapid 180 deg servo flips around the vertical thrust zero-point.
 const float VERTICAL_THROTTLE_DEADBAND = 0.05f;

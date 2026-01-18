@@ -62,4 +62,8 @@
 // Enable Emergency Manual Override switch (Channel 9 Low) to bypass TVC logic
 #define EMERGENCY_BLIMP_MANUAL_MODE true
 
+// Physical angle limits for the system's full range of motion.
+#define FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG 180.0f // Max forward tilt for cruise
+#define REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG -90.0f // Max reverse tilt
+
 #endif // CUSTOM_CONFIG_H

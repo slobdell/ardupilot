@@ -25,10 +25,21 @@ Ensure you have the ArduPilot build environment set up (waf, gcc-arm-none-eabi, 
 
 ### 2.2. Configuration
 **Step 1: Verify Feature Flags**
-Ensure `ArduCopter/custom_config.h` (or your board's header) contains:
+Ensure `ArduCopter/custom_config.h` (or your board's header) contains the following **Critical Configuration**:
+
 ```cpp
+// Backend Selection
 #define ENABLE_TRICOPTER_VTOL_BACKEND 1
 #define TRICOPTER_IS_BLIMP true
+
+// Safety & Control Logic
+#define EMERGENCY_BLIMP_MANUAL_MODE true      // Enables Channel 9 Override
+#define DISABLE_POSITION_HEADING_LOITER true  // Enables Weathervaning in Auto/Loiter
+#define CUSTOM_WEATHERVANE false              // Use standard Loiter logic (with heading disabled)
+
+// Physical Airframe Constraints (Must match your servo geometry)
+#define FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG 180.0f // Angle of motors at max forward tilt (Relative to fuselage)
+#define REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG -90.0f // Angle of motors at max reverse tilt (Relative to fuselage)
 ```
 
 **Step 2: Configure Waf**
