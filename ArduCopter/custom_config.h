@@ -46,11 +46,11 @@
 #define DISABLE_SENSOR_ROTATION false
 
 // this should only be set to true if the aircraft naturally weathervanes.
-#define DISABLE_POSITION_HEADING_LOITER false
+#define DISABLE_POSITION_HEADING_LOITER true
 
 // needs to be used in conjunction with WEATHERVANE_ENABLED. This will
 // force loiter mode to weathervane.
-#define CUSTOM_WEATHERVANE true
+#define CUSTOM_WEATHERVANE false
 
 // When true, the AP_MotorsTricopterVTOL class is used instead of the default.
 #define ENABLE_TRICOPTER_VTOL_BACKEND 1
