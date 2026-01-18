@@ -535,6 +535,13 @@ void AP_Motors6DOF::output_to_motors()
     }
 
     if (TRICOPTER_IS_BLIMP && _plane_inputs.transition_progress > 0.5f) {
+        // Initialize limits
+        limit.roll = false;
+        limit.pitch = false;
+        limit.yaw = false;
+        limit.throttle_lower = false;
+        limit.throttle_upper = false;
+
         // --- PLANE MODE OUTPUT (Direct Mapping) ---
         // 3. Pitch -> Split Control (Elevator + Vectoring)
         // Input normalized -1.0 (Fwd) to 1.0 (Back)
@@ -588,6 +595,12 @@ void AP_Motors6DOF::output_to_motors()
             _tilt_angle = val_neutral + tilt_cmd * (val_neutral - val_back); 
             // Wait, if tilt_cmd is -1. 0.5 + (-1 * 1.5) = -1.0. Correct.
         }
+
+        // Check for saturation
+        if (fabsf(elev_cmd) >= 1.0f || fabsf(_tilt_angle) >= 1.0f) {
+            limit.pitch = true;
+        }
+        _tilt_angle = constrain_float(_tilt_angle, -1.0f, 1.0f);
 
         // Output Elevator Servo
         SRV_Channels::set_output_scaled(BLIMP_ELEV_SERVO_FUNC, elev_cmd * 4500.0f);
@@ -888,6 +901,10 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     
                     // Run TVC Logic
                     TVC_Outputs tvc_outputs = tvc_run_main_logic(tvc_inputs, tvc_state, tvc_config);
+
+                    // Map Saturation Flags
+                    limit.pitch = tvc_outputs.debug_data.pitch_saturated;
+                    limit.roll = tvc_outputs.debug_data.roll_saturated;
 
                     // --- COPTER MODE MAPPING ---
                     // Map TVC Output (Pitch) to _tilt_angle
