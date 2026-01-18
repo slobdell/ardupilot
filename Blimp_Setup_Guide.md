@@ -224,6 +224,10 @@ For Blimp operation, especially in zero-airspeed hover or VTOL modes, you **MUST
 *   **`AIRSPEED_MIN`**: Set to **0**.
     *   *Why?* ArduPlane defaults this to 5 m/s or similar. If left at default, the TECS controller (speed/height) will think the aircraft is under-speeding when hovering and may apply aggressive pitch-down or throttle logic to "recover" airspeed, causing instability. Setting it to 0 tells the controller that hovering (0 m/s) is a valid flight state. This requires the custom firmware build where `MIN_AIRSPEED_MIN` constraint is removed.
 
+*   **`ARSPD_USE` / `ARSPD_TYPE`**:
+    *   **If you do NOT have a physical airspeed sensor connected:** Set `ARSPD_USE = 0` and `ARSPD_TYPE = 0`.
+    *   *Crucial:* If you enable the sensor but do not connect it, the EKF (AHRS) will report "Unhealthy" in Plane modes (MANUAL, STABILIZE) because it expects data that isn't arriving. You will be unable to arm in these modes.
+
 ## 6. Pre-Flight Verification
 
 1.  **Servo Setup:**
