@@ -78,6 +78,17 @@ static TVC_State tvc_state = {
 // --- Blimp Output Function Mappings ---
 #define BLIMP_TILT_SERVO_FUNC   SRV_Channel::k_scripting2 // Function 95
 #define BLIMP_RUDDER_SERVO_FUNC SRV_Channel::k_scripting3 // Function 96
+#define BLIMP_ELEV_SERVO_FUNC   SRV_Channel::k_scripting4 // Function 97
+
+// --- Blimp Control Parameters ---
+// Threshold (0.0 to 1.0) of input stick where Elevator saturates and Vectoring begins.
+// 0.0 = Vectoring Always Active (Elevator effectively binary saturated).
+// 0.4 = First 40% is Elevator only, then blended.
+#define BLIMP_ELEVATOR_SPLIT    0.0f 
+
+// Forward Flight cruise angle in degrees.
+// 90.0 for Blimp (Horizontal). 0.0 for standard Plane (Up).
+const float BLIMP_PLANE_FWD_ANGLE = 90.0f;
 
 // convert PWM to a float in the range -1 to 1
 static float pwm_to_thrust_float(int16_t pwm)
@@ -518,6 +529,81 @@ void AP_Motors6DOF::output_to_motors()
 {
     int8_t i;
     int16_t motor_out[AP_MOTORS_MAX_NUM_MOTORS];    // final pwm values sent to the motor
+    // Initialize to prevent compiler warnings
+    for (i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) {
+        motor_out[i] = 0;
+    }
+
+    if (TRICOPTER_IS_BLIMP && _plane_inputs.transition_progress > 0.5f) {
+        // --- PLANE MODE OUTPUT (Direct Mapping) ---
+        // 3. Pitch -> Split Control (Elevator + Vectoring)
+        // Input normalized -1.0 (Fwd) to 1.0 (Back)
+        float pitch_in = _plane_inputs.elevator_input / 4500.0f; 
+        float abs_pitch = fabsf(pitch_in);
+        
+        float elev_cmd = 0.0f;
+        float tilt_cmd = 0.0f; // 0=Forward, -1=Back, 1=Down
+
+        if (abs_pitch <= BLIMP_ELEVATOR_SPLIT) {
+             // Within elevator range
+             if (BLIMP_ELEVATOR_SPLIT > 0.001f) {
+                 elev_cmd = pitch_in / BLIMP_ELEVATOR_SPLIT;
+             }
+             tilt_cmd = 0.0f; 
+        } else {
+             // Saturated Elevator
+             elev_cmd = (pitch_in > 0) ? 1.0f : -1.0f;
+             
+             // Map Remainder to Tilt Vectoring
+             float remainder = (abs_pitch - BLIMP_ELEVATOR_SPLIT) / (1.0f - BLIMP_ELEVATOR_SPLIT);
+             if (pitch_in > 0) { 
+                 // Stick Back: Map remainder 0..1 to Tilt 0..-1.0 (Reach -0.5 Back)
+                 // If neutral is 0.5, we need to subtract 1.0 to reach -0.5.
+                 tilt_cmd = -remainder * 2.0f; 
+             } else {
+                 // Stick Forward: Map remainder 0..1 to Tilt 0..1.0 (Reach 1.0 Down)
+                 // If neutral is 0.5, we need to add 0.5 to reach 1.0.
+                 // So tilt_cmd should be 1.0 (remainder * 1.0)
+                 tilt_cmd = remainder; 
+             }
+        }
+
+        // Map Tilt Command using Physical Constants
+        // Forward (Neutral): Target Angle. Down: 180 deg. Back: -90 deg.
+        
+        // Calculate normalized values based on TVC configuration
+        float val_neutral = BLIMP_PLANE_FWD_ANGLE / FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG;
+        float val_down    = 1.0f;  // 180/180
+        float val_back    = -1.0f; // -90/90
+
+        if (tilt_cmd >= 0) {
+            // Stick Forward: Map 0..1 to Neutral..Down (0.5 -> 1.0)
+            _tilt_angle = val_neutral + tilt_cmd * (val_down - val_neutral);
+        } else {
+            // Stick Back: Map 0..-1 to Neutral..Back (0.5 -> -1.0)
+            _tilt_angle = val_neutral + tilt_cmd * (val_neutral - val_back); 
+            // Wait, if tilt_cmd is -1. 0.5 + (-1 * 1.5) = -1.0. Correct.
+        }
+
+        // Output Elevator Servo
+        SRV_Channels::set_output_scaled(BLIMP_ELEV_SERVO_FUNC, elev_cmd * 4500.0f);
+
+        // 1. Throttle -> Lift Motors (Collective Only)
+        float throttle_pct = _plane_inputs.throttle_pct * 0.01f;
+        int16_t lift_pwm = calc_thrust_to_pwm(throttle_pct, false);
+        
+        // Index 0: Right. Index 1: Left.
+        motor_out[BLIMP_MOT_LIFT_RIGHT] = lift_pwm;
+        motor_out[BLIMP_MOT_LIFT_LEFT]  = lift_pwm;
+        
+        // 2. Yaw -> Tail Motor & Servo
+        float tail_thrust = _plane_inputs.rudder_input / 4500.0f;
+        motor_out[BLIMP_MOT_YAW] = calc_thrust_to_pwm(tail_thrust, true);
+        
+        // Update member variable so the Rudder Servo output (at end of function) sees it
+        _thrust_rpyt_out[BLIMP_MOT_YAW] = tail_thrust;
+
+    } else {
 
     switch (_spool_state) {
     case SpoolState::SHUT_DOWN:
@@ -644,6 +730,7 @@ void AP_Motors6DOF::output_to_motors()
         }
         break;
     }
+    } // End else
 
     // send output to each motor
     for (i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) {
@@ -798,49 +885,12 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     // Run TVC Logic
                     TVC_Outputs tvc_outputs = tvc_run_main_logic(tvc_inputs, tvc_state, tvc_config);
 
-                    if (TRICOPTER_IS_BLIMP && _plane_inputs.transition_progress > 0.5f) {
-                        // --- PLANE MODE MAPPING ---
-                        // 1. Throttle -> Lift Motors (0..100 -> 0..1.0)
-                        throttle_thrust = _plane_inputs.throttle_pct * 0.01f;
-                        
-                        // 2. Yaw -> Tail Motor & Rudder Servo (-4500..4500 -> -1.0..1.0)
-                        yaw_thrust = _plane_inputs.rudder_input / 4500.0f;
-                        
-                        // 3. Pitch -> Tilt Servo (Piecewise Mapping centered on 90 deg Forward)
-                        // Assumes _tilt_angle: 0.0=Up, 0.5=Forward(90), 1.0=Down(180)
-                        float elev = _plane_inputs.elevator_input;
-                        
-                        if (elev >= 0) {
-                            // Stick Back (Pitch Up): Map 0..4500 to 0.5..-0.5 (Forward to Reverse)
-                            // 0 -> 0.5 (Fwd). 2250 -> 0.0 (Up). 4500 -> -0.5 (Reverse -45 deg).
-                            // Wait, you wanted -90 Back. That would be -0.5.
-                            _tilt_angle = 0.5f - (elev / 4500.0f) * 1.0f; 
-                        } else {
-                            // Stick Forward (Pitch Down): Map 0..-4500 to 0.5..1.0 (Forward to Down)
-                            _tilt_angle = 0.5f + (fabsf(elev) / 4500.0f) * 0.5f;
-                        }
+                    // --- COPTER MODE MAPPING ---
+                    // Map TVC Output (Pitch) to _tilt_angle
+                    _tilt_angle = tvc_outputs.pitch_angle_norm;
 
-                        // Disable differential motor stabilization in Plane mode for now
-                        roll_thrust = 0.0f;
-                        pitch_thrust = 0.0f;
-
-                    } else {
-                        // --- COPTER MODE MAPPING ---
-                        // Map TVC Output (Pitch) to _tilt_angle
-                        _tilt_angle = tvc_outputs.pitch_angle_norm;
-
-                        // Override Throttle with Total Vector Magnitude (Motors 1 & 2)
-                        throttle_thrust = tvc_outputs.total_throttle;
-                    }
-
-                    // Debug Plane Inputs (Verification Only)
-                    static uint32_t last_trans_log = 0;
-                    if (AP_HAL::millis() - last_trans_log > 1000) {
-                        last_trans_log = AP_HAL::millis();
-                        gcs().send_text(MAV_SEVERITY_INFO, "PLANE_IN: P:%.0f T:%.0f R:%.0f Tr:%.1f", 
-                                        (double)_plane_inputs.elevator_input, (double)_plane_inputs.throttle_pct, 
-                                        (double)_plane_inputs.rudder_input, (double)_plane_inputs.transition_progress);
-                    }
+                    // Override Throttle with Total Vector Magnitude (Motors 1 & 2)
+                    throttle_thrust = tvc_outputs.total_throttle;
 
                     if (TRICOPTER_IS_BLIMP) {
                         // --- Slew Limiter & Transient Thrust Mitigation ---

@@ -55,12 +55,12 @@ The backend uses a specific hardcoded mixer. Wire your ESCs and Servos exactly a
 
 | Output | Blimp Function | Protocol | Timer Group | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| **1** | **Right Lift** | DShot | TIM1 | Main Lift. |
-| **2** | **Left Lift** | DShot | TIM1 | Main Lift. |
-| **3** | **Tail Yaw** | **Bi-Dir DShot** | TIM1 | Yaw Control. Reversible. |
-| **4** | **Debug Thrust** | DShot | TIM1 | Manual Stick Debug. |
-| **5** | **Rudder Servo** | PWM | TIM3 | Yaw Duplicate. |
-| **6** | **Tilt Servos** | PWM | TIM3 | Vectoring. **Trim=Vertical**. |
+| **1** | **Right Lift** | DShot | TIM1 | Main Lift. (Motor 1) |
+| **2** | **Left Lift** | DShot | TIM1 | Main Lift. (Motor 2) |
+| **3** | **Tail Yaw** | **Bi-Dir DShot** | TIM1 | Yaw Control. Reversible. (Motor 3) |
+| **4** | **(Optional)** | - | - | Unused. |
+| **5** | **Rudder Servo** | PWM | TIM3 | Yaw Duplicate. (**Scripting 3**) |
+| **6** | **Tilt Servos** | PWM | TIM3 | Vectoring. (**Scripting 2**) |
 
 ### 3.2. Detailed Wiring (MicoAir743)
 
@@ -114,29 +114,33 @@ While the pilot has full access to -1.0 to +1.0 thrust (including emergency down
     *   `WPNAV_ACCEL_Z`: Set to **50 cm/s²**.
 *   **Behavior:** As long as gravity accelerates the blimp faster than the `DN_SPEED` limit, the autopilot will keep the motors in the "Positive Lift" regime to govern the descent, never crossing the 0.0 threshold into "Active Down" vectoring.
 
-### 4.5. Attitude Stabilization Logic
-*   **Roll & Pitch:** Active stabilization for Roll and Pitch is **DISABLED** in the mixer (factors set to 0.0).
-    *   **Why?** Blimps are "pendulum stable" (Center of Gravity is significantly below Center of Buoyancy). They naturally return to level.
-    *   **The Problem with PIDs:** Attempting to actively stabilize pitch with small propellers often leads to "hunting" or oscillation because the motors lack the authority to quickly overcome the massive rotational inertia and aerodynamic damping of the hull.
-    *   **Result:** The motors only respond to **Throttle** (Altitude), **Yaw** (Heading), and **Vectoring** (Position). The airframe handles stability naturally.
+### 4.5. Dual-Mode Architecture (Unified Mixing)
+The firmware automatically switches between two distinct control models based on the flight mode (`in_vtol_mode`).
 
-    *   **Forward Flight:** Transitioning to 1.0 (Forward Flight) locks motors to Full Forward (no compensation).
-    *   **Max Angle:** Updated to 89 degrees.
+*   **Copter Mode (QSTABILIZE / QHOVER):**
+    *   Uses **TVC (Thrust Vectoring Controller)** logic.
+    *   Sticks control absolute physical vectors (Vertical, Forward, Lateral).
+    *   Supports automatic pitch compensation to maintain vertical thrust.
+*   **Plane Mode (STABILIZE / MANUAL):**
+    *   Uses **Direct Actuator Mapping**.
+    *   The backend becomes a "dumb" actuator for the ArduPlane mixer.
+    *   Active stabilization (Roll/Pitch PIDs) is **disabled** to prevent motor/servo hunting, relying on the blimp's natural buoyancy stability.
 
-### 4.6. Flight Dynamics & Stick Mapping (270° Logic)
-The system maps the pilot's stick inputs to the 270° servo range (-90° Back to +180° Down) using the following logic:
+### 4.6. Plane Mode Pitch Logic (Split Control)
+The firmware implements a **Split Control** architecture for pitch, blending the Tail Elevator and Thrust Vectoring based on stick input magnitude (`BLIMP_ELEVATOR_SPLIT`).
 
-*   **Reverse (Stick Back):** `Negative Forward Input` -> **Negative Servo Angle**.
-    *   The servo tilts backward (from Vertical towards -90°).
-    *   Result: Reverse Thrust.
-*   **Cruise (Stick Forward):** `Positive Forward Input` -> **Positive Servo Angle**.
-    *   The servo tilts forward (from Vertical towards +90°).
-    *   Result: Forward Thrust.
-*   **Emergency Descent (Throttle Down):** `Negative Throttle Input` + `Positive Forward` -> **Extended Positive Servo Angle**.
-    *   The servo continues tilting past 90° (towards +180°).
-    *   Result: Downward Thrust (Inverted Propeller).
+*   **Configuration:** Currently set to **0.0** (Immediate Vectoring).
+*   **Behavior (Split = 0.0):**
+    *   **Elevator:** Instantly saturates to full deflection with any pitch input.
+    *   **Vectoring:** Begins tilting immediately from the Forward (90°) cruise position.
+*   **Mapping (Asymmetric 270°):**
+    *   **Stick Center (Neutral):** Motors point **90° Forward**.
+    *   **Stick Full Back (Pitch Up):** Motors point **0° Up** (or back to -90°).
+    *   **Stick Full Forward (Pitch Down):** Motors point **180° Down**.
 
-*Note: This allows you to traverse the entire 270° range intuitively. Pulling the stick back gives you reverse. Pushing the stick forward gives you speed. Dropping the throttle while forward gives you a power dive.*
+*Note:* This architecture allows future airframes with effective tail surfaces to use the elevator for small corrections (Split > 0) before engaging the vectoring mechanism.
+
+**Note on Manual Mode:** The firmware includes a specific override to keep motors active and controllable even in `MANUAL` mode, bypassing the standard QuadPlane safety shutdown for blimp operation.
 
 ## 5. Parameter Configuration
 
@@ -155,19 +159,18 @@ This aircraft operates exclusively in VTOL (Quad) modes.
 *   **Mode 3:** `QHOVER` (Altitude Hold with manual vectoring)
 
 ### 5.3. Motor & Servo Functions (MicoAir743 Specific)
-*   `SERVO1_FUNCTION`: **33** (Motor 1) -> Right Lift
-*   `SERVO2_FUNCTION`: **34** (Motor 2) -> Left Lift
-*   `SERVO3_FUNCTION`: **0** (Disabled)
-*   `SERVO4_FUNCTION`: **0** (Disabled)
-*   `SERVO5_FUNCTION`: **38** (Motor 6) -> Rudder Servo
-*   `SERVO6_FUNCTION`: **95** (Scripting2) -> Tilt Servo
-*   `SERVO7_FUNCTION`: **0** (Disabled).
-
-**Critical Plane Logic Mapping (Dummy Outputs):**
-You **MUST** assign these functions to unused servo channels (e.g. 13, 14, 15) to ensure ArduPlane calculates their values for the mixer, even if you don't plug anything into them.
-*   `SERVO13_FUNCTION`: **21** (Rudder)
-*   `SERVO14_FUNCTION`: **19** (Elevator)
-*   `SERVO15_FUNCTION`: **70** (Throttle)
+*   **Physical Pins (Hardware Control):**
+    *   `SERVO1_FUNCTION`: **33** (Motor 1) -> Right Lift
+    *   `SERVO3_FUNCTION`: **34** (Motor 2) -> Left Lift
+    *   `SERVO4_FUNCTION`: **35** (Motor 3) -> Tail Yaw Motor
+    *   `SERVO5_FUNCTION`: **96** (Scripting 3) -> Rudder Servo
+    *   `SERVO6_FUNCTION`: **95** (Scripting 2) -> Tilt Servo
+    *   `SERVO7_FUNCTION`: **97** (Scripting 4) -> Elevator Servo (Optional)
+*   **Critical Plane Logic (Dummy Captures):**
+    You **MUST** assign these functions to unused channels (e.g. 13, 14, 15) to enable the Plane mixer logic, even if nothing is physically connected.
+    *   `SERVO13_FUNCTION`: **21** (Rudder)
+    *   `SERVO14_FUNCTION`: **19** (Elevator)
+    *   `SERVO15_FUNCTION`: **70** (Throttle)
 
 ### 5.4. ESC & DShot (MicoAir743)
 *   **`MOT_PWM_TYPE`**: **5** (DShot300).
