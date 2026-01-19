@@ -218,16 +218,16 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     // This uses a piecewise function to correctly handle asymmetric ranges.
     float vector_pitch_out;
     if (target_pitch_deg >= 0) {
-        vector_pitch_out = target_pitch_deg / MAX(FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG, 0.1f);
+        vector_pitch_out = target_pitch_deg / std::max(FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG, 0.1f);
     } else {
-        vector_pitch_out = target_pitch_deg / MAX(fabsf(REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG), 0.1f);
+        vector_pitch_out = target_pitch_deg / std::max(fabsf(REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG), 0.1f);
     }
 
     float vector_roll_out;
     if (target_roll_deg >= 0) {
-        vector_roll_out = target_roll_deg / MAX(FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG, 0.1f);
+        vector_roll_out = target_roll_deg / std::max(FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG, 0.1f);
     } else {
-        vector_roll_out = target_roll_deg / MAX(fabsf(REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG), 0.1f);
+        vector_roll_out = target_roll_deg / std::max(fabsf(REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG), 0.1f);
     }
 #endif
 
