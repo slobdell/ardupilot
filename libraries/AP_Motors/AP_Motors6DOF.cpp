@@ -542,83 +542,95 @@ void AP_Motors6DOF::output_to_motors()
         limit.throttle_lower = false;
         limit.throttle_upper = false;
 
-        // --- PLANE MODE OUTPUT (Direct Mapping) ---
-        // 3. Pitch -> Split Control (Elevator + Vectoring)
-        // Input normalized -1.0 (Fwd) to 1.0 (Back)
-        float pitch_in = _plane_inputs.elevator_input / 4500.0f; 
-        float abs_pitch = fabsf(pitch_in);
-        
-        float elev_cmd = 0.0f;
-        float tilt_cmd = 0.0f; // 0=Forward, -1=Back, 1=Down
+        if (_spool_state == SpoolState::SHUT_DOWN) {
+            // Disarmed/Shutdown: Force Safe Outputs
+            _tilt_angle = 0.0f;
+            _thrust_rpyt_out[BLIMP_MOT_YAW] = 0.0f;
+            
+            motor_out[BLIMP_MOT_LIFT_RIGHT] = MOT_SPIN_MIN;
+            motor_out[BLIMP_MOT_LIFT_LEFT]  = MOT_SPIN_MIN;
+            motor_out[BLIMP_MOT_YAW]        = MOT_SPIN_NEUTRAL;
 
-        if (abs_pitch <= BLIMP_ELEVATOR_SPLIT) {
-             // Within elevator range
-             if (BLIMP_ELEVATOR_SPLIT > 0.001f) {
-                 elev_cmd = pitch_in / BLIMP_ELEVATOR_SPLIT;
-             }
-             tilt_cmd = 0.0f; 
+            SRV_Channels::set_output_scaled(BLIMP_ELEV_SERVO_FUNC, 0.0f);
         } else {
-             // Saturated Elevator
-             elev_cmd = (pitch_in > 0) ? 1.0f : -1.0f;
-             
-             // Map Remainder to Tilt Vectoring
-             float remainder = 0.0f;
-             if (BLIMP_ELEVATOR_SPLIT < 0.999f) {
-                 remainder = (abs_pitch - BLIMP_ELEVATOR_SPLIT) / (1.0f - BLIMP_ELEVATOR_SPLIT);
-             }
-             
-             if (pitch_in > 0) { 
-                 // Stick Back: Map remainder 0..1 to Tilt 0..-1.0 (Reach -0.5 Back)
-                 // If neutral is 0.5, we need to subtract 1.0 to reach -0.5.
-                 tilt_cmd = -remainder * 2.0f; 
-             } else {
-                 // Stick Forward: Map remainder 0..1 to Tilt 0..1.0 (Reach 1.0 Down)
-                 // If neutral is 0.5, we need to add 0.5 to reach 1.0.
-                 // So tilt_cmd should be 1.0 (remainder * 1.0)
-                 tilt_cmd = remainder; 
-             }
+            // --- PLANE MODE OUTPUT (Direct Mapping) ---
+            // 3. Pitch -> Split Control (Elevator + Vectoring)
+            // Input normalized -1.0 (Fwd) to 1.0 (Back)
+            float pitch_in = _plane_inputs.elevator_input / 4500.0f; 
+            float abs_pitch = fabsf(pitch_in);
+            
+            float elev_cmd = 0.0f;
+            float tilt_cmd = 0.0f; // 0=Forward, -1=Back, 1=Down
+
+            if (abs_pitch <= BLIMP_ELEVATOR_SPLIT) {
+                 // Within elevator range
+                 if (BLIMP_ELEVATOR_SPLIT > 0.001f) {
+                     elev_cmd = pitch_in / BLIMP_ELEVATOR_SPLIT;
+                 }
+                 tilt_cmd = 0.0f; 
+            } else {
+                 // Saturated Elevator
+                 elev_cmd = (pitch_in > 0) ? 1.0f : -1.0f;
+                 
+                 // Map Remainder to Tilt Vectoring
+                 float remainder = 0.0f;
+                 if (BLIMP_ELEVATOR_SPLIT < 0.999f) {
+                     remainder = (abs_pitch - BLIMP_ELEVATOR_SPLIT) / (1.0f - BLIMP_ELEVATOR_SPLIT);
+                 }
+                 
+                 if (pitch_in > 0) { 
+                     // Stick Back: Map remainder 0..1 to Tilt 0..-1.0 (Reach -0.5 Back)
+                     // If neutral is 0.5, we need to subtract 1.0 to reach -0.5.
+                     tilt_cmd = -remainder * 2.0f; 
+                 } else {
+                     // Stick Forward: Map remainder 0..1 to Tilt 0..1.0 (Reach 1.0 Down)
+                     // If neutral is 0.5, we need to add 0.5 to reach 1.0.
+                     // So tilt_cmd should be 1.0 (remainder * 1.0)
+                     tilt_cmd = remainder; 
+                 }
+            }
+
+            // Map Tilt Command using Physical Constants
+            // Forward (Neutral): Target Angle. Down: 180 deg. Back: -90 deg.
+            
+            // Calculate normalized values based on TVC configuration
+            float val_neutral = BLIMP_PLANE_FWD_ANGLE / FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG;
+            float val_down    = 1.0f;  // 180/180
+            float val_back    = -1.0f; // -90/90
+
+            if (tilt_cmd >= 0) {
+                // Stick Forward: Map 0..1 to Neutral..Down (0.5 -> 1.0)
+                _tilt_angle = val_neutral + tilt_cmd * (val_down - val_neutral);
+            } else {
+                // Stick Back: Map 0..-1 to Neutral..Back (0.5 -> -1.0)
+                _tilt_angle = val_neutral + tilt_cmd * (val_neutral - val_back); 
+                // Wait, if tilt_cmd is -1. 0.5 + (-1 * 1.5) = -1.0. Correct.
+            }
+
+            // Check for saturation
+            if (fabsf(elev_cmd) >= 1.0f || fabsf(_tilt_angle) >= 1.0f) {
+                limit.pitch = true;
+            }
+            _tilt_angle = constrain_float(_tilt_angle, -1.0f, 1.0f);
+
+            // Output Elevator Servo
+            SRV_Channels::set_output_scaled(BLIMP_ELEV_SERVO_FUNC, elev_cmd * 4500.0f);
+
+            // 1. Throttle -> Lift Motors (Collective Only)
+            float throttle_pct = _plane_inputs.throttle_pct * 0.01f;
+            int16_t lift_pwm = calc_thrust_to_pwm(throttle_pct, false);
+            
+            // Index 0: Right. Index 1: Left.
+            motor_out[BLIMP_MOT_LIFT_RIGHT] = lift_pwm;
+            motor_out[BLIMP_MOT_LIFT_LEFT]  = lift_pwm;
+            
+            // 2. Yaw -> Tail Motor & Servo
+            float tail_thrust = _plane_inputs.rudder_input / 4500.0f;
+            motor_out[BLIMP_MOT_YAW] = calc_thrust_to_pwm(tail_thrust, true);
+            
+            // Update member variable so the Rudder Servo output (at end of function) sees it
+            _thrust_rpyt_out[BLIMP_MOT_YAW] = tail_thrust;
         }
-
-        // Map Tilt Command using Physical Constants
-        // Forward (Neutral): Target Angle. Down: 180 deg. Back: -90 deg.
-        
-        // Calculate normalized values based on TVC configuration
-        float val_neutral = BLIMP_PLANE_FWD_ANGLE / FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG;
-        float val_down    = 1.0f;  // 180/180
-        float val_back    = -1.0f; // -90/90
-
-        if (tilt_cmd >= 0) {
-            // Stick Forward: Map 0..1 to Neutral..Down (0.5 -> 1.0)
-            _tilt_angle = val_neutral + tilt_cmd * (val_down - val_neutral);
-        } else {
-            // Stick Back: Map 0..-1 to Neutral..Back (0.5 -> -1.0)
-            _tilt_angle = val_neutral + tilt_cmd * (val_neutral - val_back); 
-            // Wait, if tilt_cmd is -1. 0.5 + (-1 * 1.5) = -1.0. Correct.
-        }
-
-        // Check for saturation
-        if (fabsf(elev_cmd) >= 1.0f || fabsf(_tilt_angle) >= 1.0f) {
-            limit.pitch = true;
-        }
-        _tilt_angle = constrain_float(_tilt_angle, -1.0f, 1.0f);
-
-        // Output Elevator Servo
-        SRV_Channels::set_output_scaled(BLIMP_ELEV_SERVO_FUNC, elev_cmd * 4500.0f);
-
-        // 1. Throttle -> Lift Motors (Collective Only)
-        float throttle_pct = _plane_inputs.throttle_pct * 0.01f;
-        int16_t lift_pwm = calc_thrust_to_pwm(throttle_pct, false);
-        
-        // Index 0: Right. Index 1: Left.
-        motor_out[BLIMP_MOT_LIFT_RIGHT] = lift_pwm;
-        motor_out[BLIMP_MOT_LIFT_LEFT]  = lift_pwm;
-        
-        // 2. Yaw -> Tail Motor & Servo
-        float tail_thrust = _plane_inputs.rudder_input / 4500.0f;
-        motor_out[BLIMP_MOT_YAW] = calc_thrust_to_pwm(tail_thrust, true);
-        
-        // Update member variable so the Rudder Servo output (at end of function) sees it
-        _thrust_rpyt_out[BLIMP_MOT_YAW] = tail_thrust;
 
     } else {
 

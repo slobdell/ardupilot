@@ -1,4 +1,5 @@
 #include "Plane.h"
+#include "../ArduCopter/custom_config.h"
 
 // returns true if the vehicle is in landing sequence.  Intended only
 // for use in failsafe code.
@@ -20,6 +21,13 @@ bool Plane::failsafe_in_landing_sequence() const
 
 void Plane::failsafe_short_on_event(enum failsafe_state fstype, ModeReason reason)
 {
+    // SBL check for balloon kill switch
+    if (FAILSAFE_KILL_MOTORS) {
+        gcs().send_text(MAV_SEVERITY_WARNING, "RC Short Failsafe: Killing Motors");
+        arming.disarm(AP_Arming::Method::RADIOFAILSAFE);
+        return;
+    }
+
     // This is how to handle a short loss of control signal failsafe.
     failsafe.state = fstype;
     failsafe.short_timer_ms = millis();
@@ -107,6 +115,12 @@ void Plane::failsafe_short_on_event(enum failsafe_state fstype, ModeReason reaso
 
 void Plane::failsafe_long_on_event(enum failsafe_state fstype, ModeReason reason)
 {
+    // SBL check for balloon kill switch
+    if (FAILSAFE_KILL_MOTORS) {
+        gcs().send_text(MAV_SEVERITY_WARNING, "RC Long Failsafe: Killing Motors");
+        arming.disarm(AP_Arming::Method::RADIOFAILSAFE);
+        return;
+    }
 
     // This is how to handle a long loss of control signal failsafe.
     //  If the GCS is locked up we allow control to revert to RC

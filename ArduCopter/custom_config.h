@@ -25,7 +25,7 @@
 #define ACRO_YAW_GAIN 1.0
 
 // feature that kills the motors on radio disconnect.
-#define FAILSAFE_KILL_MOTORS false
+#define FAILSAFE_KILL_MOTORS true
 
 // for GPS health check removal
 #define INDOOR_AIRCRAFT false

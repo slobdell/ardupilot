@@ -36,6 +36,7 @@ Ensure `ArduCopter/custom_config.h` (or your board's header) contains the follow
 #define EMERGENCY_BLIMP_MANUAL_MODE true      // Enables Channel 9 Override
 #define DISABLE_POSITION_HEADING_LOITER true  // Enables Weathervaning in Auto/Loiter
 #define CUSTOM_WEATHERVANE false              // Use standard Loiter logic (with heading disabled)
+#define FAILSAFE_KILL_MOTORS true             // Immediately disarm on Radio Failsafe
 
 // Physical Airframe Constraints (Must match your servo geometry)
 #define FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG 180.0f // Angle of motors at max forward tilt (Relative to fuselage)
@@ -118,12 +119,12 @@ You must configure the `SERVO5` parameters to define the physical range of your 
 While the pilot has full access to -1.0 to +1.0 thrust (including emergency downward vectoring), the autopilot and Loiter modes should generally only use gravity for descent.
 *   **Descent Priority:** To ensure the system never "needs" to use active downward thrust automatically, you must limit the commanded descent velocity to be less than the blimp's natural unpowered terminal velocity.
 *   **Vertical Speed Requirements:**
-    *   `WPNAV_SPEED_DN` (Auto Mode Descent): Set to **100 cm/s**.
-    *   `PILOT_SPEED_DN` (Loiter Mode Descent): Set to **100 cm/s**.
-    *   `PILOT_SPEED_UP` (Loiter Mode Climb): Set to **200 cm/s**.
-    *   `PILOT_ACCEL_Z`: Set to **50 cm/s²**.
-    *   `WPNAV_ACCEL_Z`: Set to **50 cm/s²**.
-*   **Behavior:** As long as gravity accelerates the blimp faster than the `DN_SPEED` limit, the autopilot will keep the motors in the "Positive Lift" regime to govern the descent, never crossing the 0.0 threshold into "Active Down" vectoring.
+    *   `Q_WP_SPD_DN` (Auto Mode Descent): Set to **30** (30 cm/s).
+    *   `Q_WP_SPD_UP` (Auto Mode Climb): Set to **30** (30 cm/s).
+    *   `Q_PILOT_SPD_DN` (Loiter Mode Descent): Set to **0** (Matches Up Speed).
+    *   `Q_PILOT_SPD_UP` (Loiter Mode Climb): Set to **30** (30 cm/s).
+    *   `Q_PILOT_ACCEL_Z`: Set to **50** (50 cm/s²). Smooth response (0.6s to full speed).
+*   **Behavior:** These conservative speeds (0.3 m/s) ensure the blimp remains stable and within its thrust authority during altitude changes.
 
 ### 4.5. Dual-Mode Architecture (Unified Mixing)
 The firmware automatically switches between two distinct control models based on the flight mode (`in_vtol_mode`).
@@ -201,7 +202,7 @@ This aircraft operates exclusively in VTOL (Quad) modes.
     *   `Q_A_RAT_YAW_P`: **0.1** (Low P to prevent wag).
     *   `Q_A_RAT_YAW_I`: **0.01** (Minimal I to prevent windup).
     *   `Q_A_RAT_YAW_D`: **0.0** (Disabled).
-    *   `Q_A_RAT_YAW_FF`: **0.5** (Primary control authority - Direct Stick-to-Motor).
+    *   `Q_A_RAT_YAW_FF`: **0.5** (Primary control authority - Direct Stick-to-Motor). Verified effective value.
     *   `Q_A_RATE_Y_MAX`: **30** (Limit max yaw rate to 30 deg/s to prevent saturation).
 *   **Thrust:**
     *   `Q_M_THST_HOVER`: **0.3** (Adjust for buoyancy).
@@ -228,6 +229,28 @@ For Blimp operation, especially in zero-airspeed hover or VTOL modes, you **MUST
     *   **If you do NOT have a physical airspeed sensor connected:** Set `ARSPD_USE = 0` and `ARSPD_TYPE = 0`.
     *   *Crucial:* If you enable the sensor but do not connect it, the EKF (AHRS) will report "Unhealthy" in Plane modes (MANUAL, STABILIZE) because it expects data that isn't arriving. You will be unable to arm in these modes.
 
+### 5.8. Loiter & Navigation Tuning (Blimp Inertia)
+Blimps have high inertia and low thrust authority. Default QuadPlane settings are too aggressive.
+*   `Q_LOIT_SPEED`: **200** (2 m/s). Limits max speed in Loiter to prevent overshooting.
+*   `Q_LOIT_ACC_MAX`: **50** (50 cm/s²). Limits acceleration demand.
+*   `Q_LOIT_BRK_ACCEL`: **25** (25 cm/s²). Gentle braking to prevent violent pitch oscillations when stopping.
+*   `Q_LOIT_BRK_JERK`: **100**. Smooths the onset of braking.
+*   `Q_LOIT_ANG_MAX`: **20** (Degrees). Limits the maximum tilt/vectoring angle commanded by the position controller.
+*   `WP_RADIUS`: **10** (Meters). For Plane modes.
+*   `Q_WP_RADIUS`: **10** (Meters). For VTOL/Loiter modes.
+    *   *Note:* A large radius is critical to prevent the blimp from oscillating around waypoints it cannot physically turn sharp enough to hit.
+
+### 5.9. Failsafe Configuration
+*   **RC Failsafe:** What happens if the radio link drops?
+    *   **Behavior:** The blimp is configured with `FAILSAFE_KILL_MOTORS = true`. On any radio failsafe (short or long), the aircraft will **immediately disarm**, killing all motors and servos. This allows the blimp to drift safely using its natural buoyancy.
+    *   `THR_FAILSAFE`: Ensure your receiver is set up to trigger this. For ELRS, it usually holds "No Pulses" or a specific preset. ArduPilot detects "No Pulses" easily.
+    *   **Action:** Set `FS_THR_ENABLE = 1` and `FS_THR_VALUE` appropriately.
+*   **EKF Failsafe:** What happens if the Optical Flow or MAVLink GPS glitches?
+    *   `FS_EKF_ACTION`: **1** (QLand). Safe slow descent.
+    *   `FS_EKF_THRESH`: **0.8**.
+*   **Battery Failsafe:**
+    *   `BATT_FS_LOW_ACT`: **2** (QLand).
+
 ## 6. Pre-Flight Verification
 
 1.  **Servo Setup:**
@@ -249,6 +272,11 @@ For Blimp operation, especially in zero-airspeed hover or VTOL modes, you **MUST
 4.  **Debug Test:**
     *   If enabled, Motor 7 should spin proportional to your forward pitch stick input.
 
+5.  **Transition Ground Test:**
+    *   Arm in `QSTABILIZE`. Switch to `FBWA`.
+    *   Verify: Motors stay spinning. Pitch stick tilts motors. Yaw stick moves rudder servo.
+    *   Switch back to `QSTABILIZE`.
+
 ## 7. Recommended Peripherals
 
 ### 7.1. Rangefinder
@@ -258,10 +286,47 @@ For Blimp operation, especially in zero-airspeed hover or VTOL modes, you **MUST
 *   **Parameters:**
     *   `SERIALx_PROTOCOL`: **9** (Rangefinder).
     *   `SERIALx_BAUD`: **115** (115200).
-    *   `RNGFND1_TYPE`: **19** (Benewake TF02).
-    *   `RNGFND1_MIN_CM`: **10**.
+    *   `RNGFND1_TYPE`: **27** (Benewake-TF03/TF02-Pro).
+    *   `RNGFND1_MIN_CM`: **1**.
     *   `RNGFND1_MAX_CM`: **4000**.
     *   `RNGFND1_ORIENT`: **25** (Down).
+
+## 8. EKF3 Configuration (Indoor GPS + Optical Flow)
+
+This configuration fuses **MAVLink GPS** (Android Location Services) for absolute position with **Optical Flow** for precision velocity/loiter, and **Lidar** for altitude.
+
+*   **Enable EKF3:** `EK3_ENABLE = 1`
+*   **Optical Flow Mode:**
+    *   `EK3_FLOW_USE`: **1** (Navigation).
+    *   *Note:* The default for QuadPlane is 2 (Terrain). You **MUST** change this to 1 to use Optical Flow for position/velocity control.
+
+*   **Source 1 (Primary - GPS):**
+    *   `EK3_SRC1_POSXY`: **3** (GPS) - Uses MAVLink GPS for absolute position.
+    *   `EK3_SRC1_VELXY`: **3** (GPS) - Uses MAVLink GPS for velocity.
+    *   `EK3_SRC1_POSZ`: **2** (RangeFinder) - Uses Lidar for altitude.
+    *   `EK3_SRC1_VELZ`: **0** (None).
+    *   `EK3_SRC1_YAW`: **1** (Compass).
+
+*   **Source 2 (Secondary - OptFlow):**
+    *   `EK3_SRC2_POSXY`: **0** (None).
+    *   `EK3_SRC2_VELXY`: **5** (Optical Flow).
+    *   `EK3_SRC2_POSZ`: **0** (None).
+    *   `EK3_SRC2_VELZ`: **0** (None).
+    *   `EK3_SRC2_YAW`: **0** (None).
+
+*   **Fusion Settings:**
+    *   `EK3_SRC_OPTIONS`: **1** (FuseAllVelocities). This fuses *both* GPS and Optical Flow velocities for optimal stability.
+
+*   **GPS Configuration (for MAVLink GPS):**
+    *   `GPS_TYPE`: **1** (Auto) or **14** (MAV).
+
+*   **Optical Flow Settings:**
+    *   `FLOW_TYPE`: **[Your Sensor Type]** (e.g., 6 for MSP, 5 for CXOF).
+    *   `FLOW_POS_X`, `FLOW_POS_Y`, `FLOW_POS_Z`: Measure sensor offset from CG in meters.
+
+*   **Lidar Settings (Critical for Flow):**
+    *   `EK3_RNG_USE_HGT`: **70** (%) - Use Lidar for altitude when below 70% of max range.
+    *   `EK3_RNG_USE_SPD`: **2.0** (m/s) - Max speed to use Lidar.
 
 ---
 **Note:** This configuration uses `OPEN_LOOP_SERVO_MODE` logic, bypassing internal angular PIDs for the tilt mechanism and relying on direct trigonometric mapping for robust, predictable vectoring.
