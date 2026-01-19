@@ -1027,10 +1027,8 @@ void QuadPlane::hold_stabilize(float throttle_in)
             should_boost = false;
         }
 #if ENABLE_TRICOPTER_VTOL_BACKEND
-        if (TRICOPTER_IS_BLIMP) {
-            // blimps tilt motors to stay vertical, no loss of vertical lift
-            should_boost = false;
-        }
+        // blimps and other 6DOF backends tilt motors to stay vertical, no loss of vertical lift
+        should_boost = false;
 #endif
         attitude_control->set_throttle_out(throttle_in, should_boost, 0);
     }
@@ -1797,6 +1795,12 @@ void QuadPlane::update(void)
             assisted_flight = false;
         } else {
             transition->update();
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+            // Force motor output in Plane/FBWA modes because Blimp uses
+            // AP_Motors backend for ALL flight (Unified Mixing).
+            set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
+            motors_output(true); // Run WITH rate controller to keep PIDs active (Foundation for future hybrid modes)
+#endif
         }
 
     } else {
