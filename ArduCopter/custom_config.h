@@ -40,10 +40,9 @@
 // determined this is not necessary.
 #define VISODOM_PRIMARY_COMPASS false
 
-// NOT YET TESTED; this disables the assumption that optical flow and range
-// finder rotate along with the flight controller. Useful for our custom
-// airfame.
-#define DISABLE_SENSOR_ROTATION false
+// Granular control for optical flow/rangefinder stabilization
+#define OPTICAL_FLOW_STABILIZED_ROLL false
+#define OPTICAL_FLOW_STABILIZED_PITCH false
 
 // this should only be set to true if the aircraft naturally weathervanes.
 #define DISABLE_POSITION_HEADING_LOITER true

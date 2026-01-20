@@ -93,6 +93,15 @@ void NavEKF3_core::EstimateTerrainOffset(const of_elements &ofDataDelayed)
     } else {
         inhibitGndState = false;
 
+        ftype tnb_z = prevTnb.c.z;
+        if (OPTICAL_FLOW_STABILIZED_ROLL || OPTICAL_FLOW_STABILIZED_PITCH) {
+            ftype roll, pitch, yaw;
+            stateStruct.quat.to_euler(roll, pitch, yaw);
+            ftype effective_roll = OPTICAL_FLOW_STABILIZED_ROLL ? 0.0f : roll;
+            ftype effective_pitch = OPTICAL_FLOW_STABILIZED_PITCH ? 0.0f : pitch;
+            tnb_z = cosf(effective_roll) * cosf(effective_pitch);
+        }
+
         // propagate ground position state noise each time this is called using the difference in position since the last observations and an RMS gradient assumption
         // limit distance to prevent intialisation after bad gps causing bad numerical conditioning
         ftype distanceTravelledSq = sq(stateStruct.position[0] - prevPosN) + sq(stateStruct.position[1] - prevPosE);
@@ -110,21 +119,23 @@ void NavEKF3_core::EstimateTerrainOffset(const of_elements &ofDataDelayed)
         if (rangeDataToFuse) {
             // reset terrain state if rangefinder data not fused for 5 seconds
             if (imuSampleTime_ms - gndHgtValidTime_ms > 5000) {
-                terrainState = MAX(rangeDataDelayed.rng * prevTnb.c.z, rngOnGnd) + stateStruct.position.z;
+                terrainState = MAX(rangeDataDelayed.rng * tnb_z, rngOnGnd) + stateStruct.position.z;
             }
 
             // predict range
-            ftype predRngMeas = MAX((terrainState - stateStruct.position[2]),rngOnGnd) / prevTnb.c.z;
+            ftype predRngMeas = MAX((terrainState - stateStruct.position[2]),rngOnGnd) / tnb_z;
             // Copy required states to local variable names
             ftype q0 = stateStruct.quat[0]; // quaternion at optical flow measurement time
             ftype q1 = stateStruct.quat[1]; // quaternion at optical flow measurement time
             ftype q2 = stateStruct.quat[2]; // quaternion at optical flow measurement time
             ftype q3 = stateStruct.quat[3]; // quaternion at optical flow measurement time
-            if(DISABLE_SENSOR_ROTATION) {
+            if(OPTICAL_FLOW_STABILIZED_ROLL || OPTICAL_FLOW_STABILIZED_PITCH) {
               Vector3F eulerAngles;
               QuaternionF tmpQuat;
               stateStruct.quat.to_euler(eulerAngles);
-              tmpQuat.from_euler(0, 0, eulerAngles.z);
+              ftype eff_roll = (OPTICAL_FLOW_STABILIZED_ROLL) ? 0.0f : eulerAngles.x;
+              ftype eff_pitch = (OPTICAL_FLOW_STABILIZED_PITCH) ? 0.0f : eulerAngles.y;
+              tmpQuat.from_euler(eff_roll, eff_pitch, eulerAngles.z);
               q0 = tmpQuat[0];
               q1 = tmpQuat[1];
               q2 = tmpQuat[2];
@@ -180,11 +191,13 @@ void NavEKF3_core::EstimateTerrainOffset(const of_elements &ofDataDelayed)
             ftype K_OPT;
             ftype H_OPT;
             Vector2F auxFlowObsInnovVar;
-            if(DISABLE_SENSOR_ROTATION) {
+            if(OPTICAL_FLOW_STABILIZED_ROLL || OPTICAL_FLOW_STABILIZED_PITCH) {
               Vector3F eulerAngles;
               QuaternionF tmpQuat;
               stateStruct.quat.to_euler(eulerAngles);
-              tmpQuat.from_euler(0, 0, eulerAngles.z);
+              ftype eff_roll = (OPTICAL_FLOW_STABILIZED_ROLL) ? 0.0f : eulerAngles.x;
+              ftype eff_pitch = (OPTICAL_FLOW_STABILIZED_PITCH) ? 0.0f : eulerAngles.y;
+              tmpQuat.from_euler(eff_roll, eff_pitch, eulerAngles.z);
               q0 = tmpQuat[0];
               q1 = tmpQuat[1];
               q2 = tmpQuat[2];
@@ -192,7 +205,7 @@ void NavEKF3_core::EstimateTerrainOffset(const of_elements &ofDataDelayed)
             }
 
             // predict range to centre of image
-            ftype flowRngPred = MAX((terrainState - stateStruct.position.z),rngOnGnd) / prevTnb.c.z;
+            ftype flowRngPred = MAX((terrainState - stateStruct.position.z),rngOnGnd) / tnb_z;
 
             // constrain terrain height to be below the vehicle
             terrainState = MAX(terrainState, stateStruct.position.z + rngOnGnd);
@@ -310,11 +323,13 @@ void NavEKF3_core::FuseOptFlow(const of_elements &ofDataDelayed, bool really_fus
     ftype q1 = stateStruct.quat[1];
     ftype q2 = stateStruct.quat[2];
     ftype q3 = stateStruct.quat[3];
-    if(DISABLE_SENSOR_ROTATION) {
+    if(OPTICAL_FLOW_STABILIZED_ROLL || OPTICAL_FLOW_STABILIZED_PITCH) {
       Vector3F eulerAngles;
       QuaternionF tmpQuat;
       stateStruct.quat.to_euler(eulerAngles);
-      tmpQuat.from_euler(0, 0, eulerAngles.z);
+      ftype eff_roll = (OPTICAL_FLOW_STABILIZED_ROLL) ? 0.0f : eulerAngles.x;
+      ftype eff_pitch = (OPTICAL_FLOW_STABILIZED_PITCH) ? 0.0f : eulerAngles.y;
+      tmpQuat.from_euler(eff_roll, eff_pitch, eulerAngles.z);
       q0 = tmpQuat[0];
       q1 = tmpQuat[1];
       q2 = tmpQuat[2];
@@ -325,11 +340,20 @@ void NavEKF3_core::FuseOptFlow(const of_elements &ofDataDelayed, bool really_fus
     ftype vd = stateStruct.velocity.z;
     ftype pd = stateStruct.position.z;
 
+    ftype tnb_z = prevTnb.c.z;
+    if (OPTICAL_FLOW_STABILIZED_ROLL || OPTICAL_FLOW_STABILIZED_PITCH) {
+        ftype roll, pitch, yaw;
+        stateStruct.quat.to_euler(roll, pitch, yaw);
+        ftype effective_roll = OPTICAL_FLOW_STABILIZED_ROLL ? 0.0f : roll;
+        ftype effective_pitch = OPTICAL_FLOW_STABILIZED_PITCH ? 0.0f : pitch;
+        tnb_z = cosf(effective_roll) * cosf(effective_pitch);
+    }
+
     // constrain height above ground to be above range measured on ground
     ftype heightAboveGndEst = MAX((terrainState - pd), rngOnGnd);
 
     // calculate range from ground plain to centre of sensor fov assuming flat earth
-    ftype range = constrain_ftype((heightAboveGndEst/prevTnb.c.z),rngOnGnd,1000.0f);
+    ftype range = constrain_ftype((heightAboveGndEst/tnb_z),rngOnGnd,1000.0f);
 
     // correct range for flow sensor offset body frame position offset
     // the corrected value is the predicted range from the sensor focal point to the

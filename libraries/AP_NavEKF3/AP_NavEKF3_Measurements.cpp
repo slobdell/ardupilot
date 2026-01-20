@@ -205,9 +205,11 @@ void NavEKF3_core::writeOptFlowMeas(const uint8_t rawFlowQuality, const Vector2f
         of_elements ofDataNew {};
         ofDataNew.bodyRadXYZ.x = rawGyroRates.x - flowGyroBias.x;
         ofDataNew.bodyRadXYZ.y = rawGyroRates.y - flowGyroBias.y;
-        if(DISABLE_SENSOR_ROTATION) {
-          ofDataNew.bodyRadXYZ.x = 0;
-          ofDataNew.bodyRadXYZ.y = 0;
+        if (OPTICAL_FLOW_STABILIZED_ROLL) {
+            ofDataNew.bodyRadXYZ.x = 0;
+        }
+        if (OPTICAL_FLOW_STABILIZED_PITCH) {
+            ofDataNew.bodyRadXYZ.y = 0;
         }
         // the sensor interface doesn't provide a z axis rate so use the rate from the nav sensor instead
         if (delTimeOF > 0.001f) {
