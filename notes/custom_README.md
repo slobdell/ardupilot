@@ -117,14 +117,23 @@ Plain-text logging is configured to output on `SERIAL7` (physical port UART8).
 - **Hardware:** Connect a USB-to-Serial (FTDI) adapter from the UART8 TX/GND pins on the flight controller to your computer.
 - **Viewing:** Use the Arduino IDE's Serial Monitor (or any other serial terminal) connected to the FTDI's COM port at **115200 baud**.
 
-## 5. Key Project Files
+## 5. Modular Mixer Architecture
 
-- `libraries/AP_CustomConfig/AP_CustomConfig.h`: Contains the master `RUN_CUSTOM_LOOP` feature flag.
-- `ArduCopter/custom_main.cpp`: Contains the `newMain()` function, the entry point for all custom application logic.
-- `ArduCopter/mode.cpp`: Modified to include the hook that calls `newMain()` when the feature flag is enabled.
-- `micoair-h743.cfg`: The custom OpenOCD configuration file required to correctly flash the dual-bank memory of the MicoAir H743.
+The project implements a modular motor mixing architecture in `AP_Motors6DOF`. This allows for a clean separation between high-level perception (inputs from Copter and Plane modes) and low-level actuation (motor thrusts and servo angles).
 
-## 6. Future Vision
+- **`AP_CustomConfig` Library:** A shared library for all vehicle types that defines airframe-specific configurations (Blimp vs. Avatar).
+- **`MixerInputs` & `MixerOutputs`:** Standardized data contracts that establish a stateless boundary for mixing logic.
+- **Mixer Classes (`BlimpMixer`, `AvatarMixer`):** Isolated implementations for different airframe dynamics, ensuring new developments don't regress existing airframes.
+
+## 6. Key Project Files
+
+- `libraries/AP_CustomConfig/AP_CustomConfig.h`: Central configuration for all vehicle types.
+- `libraries/AP_Motors/AP_Motors6DOF_Mixer.h`: Definition of the modular mixer interface and data contracts.
+- `libraries/AP_Motors/AP_Motors6DOF_BlimpMixer.cpp`: Specialized mixing logic for the indoor blimp airframe.
+- `ArduCopter/custom_main.cpp`: Entry point for the custom control loop (when enabled).
+- `micoair-h743.cfg`: Custom OpenOCD configuration for the dual-bank H743 flash.
+
+## 7. Future Vision
 
 With this foundation, the project is positioned to serve as a robust platform for various custom applications. Next steps include:
 - Implementing low-level SPI drivers to communicate with the BMI088 directly (if needed, for comparison against the EKF).

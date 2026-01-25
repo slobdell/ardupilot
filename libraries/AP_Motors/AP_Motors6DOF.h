@@ -7,24 +7,24 @@
 #include <AP_Math/AP_Math.h>        // ArduPilot Mega Vector/Matrix math Library
 #include <RC_Channel/RC_Channel.h>     // RC Channel Library
 #include "AP_MotorsMatrix.h"
+#include "AP_Motors6DOF_Mixer.h"
 
 /// @class      AP_MotorsMatrix
 class AP_Motors6DOF : public AP_MotorsMatrix {
 public:
 
     // if the expected number of motors have been setup then set as initalized
+    void init(motor_frame_class frame_class, motor_frame_type frame_type) override;
     bool init(uint8_t expected_num_motors) override;
 
     AP_Motors6DOF(uint16_t speed_hz = AP_MOTORS_SPEED_DEFAULT) :
         AP_MotorsMatrix(speed_hz),
-        _tilt_angle(0.0f),
-        _current_tilt_deg(0.0f)
-#if EMERGENCY_BLIMP_MANUAL_MODE
-        , _manual_override_active(false) 
-#endif
+        _mixer(nullptr)
         {
         AP_Param::setup_object_defaults(this, var_info);
     };
+
+    virtual ~AP_Motors6DOF();
 
     // Supported frame types
     typedef enum {
@@ -72,6 +72,9 @@ public:
 
     bool set_reversed(int motor_number, bool reversed);
 
+    //Override MotorsMatrix method
+    void add_motor_raw_6dof(int8_t motor_num, float roll_fac, float pitch_fac, float yaw_fac, float climb_fac, float forward_fac, float lat_fac, uint8_t testing_order);
+
     // var_info for holding Parameter information
     static const struct AP_Param::GroupInfo        var_info[];
 
@@ -79,12 +82,12 @@ protected:
     // return current_limit as a number from 0 ~ 1 in the range throttle_min to throttle_max
     float               get_current_limit_max_throttle() override;
 
-    //Override MotorsMatrix method
-    void add_motor_raw_6dof(int8_t motor_num, float roll_fac, float pitch_fac, float yaw_fac, float climb_fac, float forward_fac, float lat_fac, uint8_t testing_order);
-
     void output_armed_stabilizing() override;
-    void output_armed_stabilizing_vectored();
-    void output_armed_stabilizing_vectored_6dof();
+
+    // Mixer Refactor members
+    AP_Motors6DOF_Mixer::Interface* _mixer;
+    AP_Motors6DOF_Mixer::MixerState _mixer_state;
+    AP_Motors6DOF_Mixer::MixerOutputs _mixer_results;
 
     // Parameters
     AP_Int8             _motor_reverse[AP_MOTORS_MAX_NUM_MOTORS];
@@ -94,12 +97,6 @@ protected:
     float               _lateral_factor[AP_MOTORS_MAX_NUM_MOTORS];  // each motors contribution to lateral (left/right)
     float               _tilt_factor[AP_MOTORS_MAX_NUM_MOTORS];     // each motors contribution to tilt angle (servo)
     
-    float               _tilt_angle; // The calculated tilt angle (-1 to 1)
-    float               _current_tilt_deg; // Estimated physical position in degrees
-#if EMERGENCY_BLIMP_MANUAL_MODE
-    bool                _manual_override_active; // True if manual bypass is engaged
-#endif
-
     PlaneInputs         _plane_inputs;
 
     // current limiting
