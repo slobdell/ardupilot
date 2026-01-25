@@ -6,7 +6,7 @@
 #include <AP_Logger/AP_Logger.h>
 #include <AP_DAL/AP_DAL.h>
 #include <AP_InternalError/AP_InternalError.h>
-#include "../../ArduCopter/custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 #if AP_RANGEFINDER_ENABLED
 /********************************************************
@@ -205,10 +205,10 @@ void NavEKF3_core::writeOptFlowMeas(const uint8_t rawFlowQuality, const Vector2f
         of_elements ofDataNew {};
         ofDataNew.bodyRadXYZ.x = rawGyroRates.x - flowGyroBias.x;
         ofDataNew.bodyRadXYZ.y = rawGyroRates.y - flowGyroBias.y;
-        if (OPTICAL_FLOW_STABILIZED_ROLL) {
+        if (g_config.optical_flow_stabilized_roll) {
             ofDataNew.bodyRadXYZ.x = 0;
         }
-        if (OPTICAL_FLOW_STABILIZED_PITCH) {
+        if (g_config.optical_flow_stabilized_pitch) {
             ofDataNew.bodyRadXYZ.y = 0;
         }
         // the sensor interface doesn't provide a z axis rate so use the rate from the nav sensor instead

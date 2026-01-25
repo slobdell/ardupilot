@@ -228,7 +228,7 @@ The system was refactored to use a clean, unambiguous control abstraction based 
 
 The TVC's role is to decide on a **target physical angle** and then normalize it into a generic `-1.0` to `1.0` command. To handle asymmetric ranges (e.g., -10° to +93°), it uses a **piecewise normalization**:
 
--   **Configuration:** The TVC is configured with the system's true physical envelope: `FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG` (e.g., 93.0) and `REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG` (e.g., -10.0).
+-   **Configuration:** The TVC is configured with the system's true physical envelope: `g_config.forward_flight_physical_angle_deg` (e.g., 93.0) and `g_config.reverse_flight_physical_angle_deg` (e.g., -10.0).
 -   **Logic:**
     -   If the calculated `target_physical_angle` is positive, it is normalized by the forward limit: `command = target_angle / 93.0`.
     -   If the `target_physical_angle` is negative, it is normalized by the absolute value of the reverse limit: `command = target_angle / 10.0`.
@@ -250,7 +250,7 @@ This new architecture elegantly handles the different requirements of VTOL fligh
 
 -   **In Hover (Q-Modes):** The TVC's PID controllers are active. When the pilot commands a forward tilt, the TVC calculates a target angle. This angle is **clamped** by the `HOVER_MAX_PITCH_COMMAND_DEG` (e.g., 60°) for stability. The TVC then normalizes this clamped angle (e.g., `60.0 / 93.0 = 0.645`) and sends it to the SFC. The SFC receives `0.645` and correctly commands the servo to the **60° physical position**. The system respects the stability limit.
 
--   **In Forward Flight (FW-Modes):** When the transition is complete (`transition_progress = 1.0`), the TVC's blending logic commands the system to its maximum physical forward angle, `FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG` (93°). It normalizes this (`93.0 / 93.0 = 1.0`) and sends `1.0` to the SFC. The SFC receives `1.0` and commands the servo to its configured `servo_max_angle_deg`, achieving the **93° physical position** for efficient cruise.
+-   **In Forward Flight (FW-Modes):** When the transition is complete (`transition_progress = 1.0`), the TVC's blending logic commands the system to its maximum physical forward angle, `g_config.forward_flight_physical_angle_deg` (93°). It normalizes this (`93.0 / 93.0 = 1.0`) and sends `1.0` to the SFC. The SFC receives `1.0` and commands the servo to its configured `servo_max_angle_deg`, achieving the **93° physical position** for efficient cruise.
 
 This clean separation of concerns ensures the system is robust, configurable, and behaves predictably across all flight phases, while also providing a correct saturation feedback mechanism to the TVC's internal PID controllers.
 

@@ -6,7 +6,7 @@
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Math/AP_Math.h>
 
-#include "../../ArduCopter/custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 // 6DoF control is extracted from the existing copter code by treating desired angles as thrust angles rather than vehicle attitude.
 // Vehicle attitude is then set separately, typically the vehicle would maintain 0 roll and pitch.

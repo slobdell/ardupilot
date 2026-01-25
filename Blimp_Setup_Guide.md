@@ -34,8 +34,8 @@ Ensure `ArduCopter/custom_config.h` (or your board's header) contains the follow
 
 // Safety & Control Logic
 #define EMERGENCY_BLIMP_MANUAL_MODE true      // Enables Channel 9 Override
-#define DISABLE_POSITION_HEADING_LOITER true  // Enables Weathervaning in Auto/Loiter
-#define CUSTOM_WEATHERVANE false              // Use standard Loiter logic (with heading disabled)
+#define DISABLE_POSITION_HEADING_LOITER false // Disable Weathervaning to maintain position heading
+#define CUSTOM_WEATHERVANE false              // Use standard Loiter logic (with heading enabled)
 #define FAILSAFE_KILL_MOTORS true             // Immediately disarm on Radio Failsafe
 
 // Physical Airframe Constraints (Must match your servo geometry)

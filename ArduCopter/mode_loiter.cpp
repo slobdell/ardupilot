@@ -1,5 +1,5 @@
 #include "Copter.h"
-#include "custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 #if MODE_LOITER_ENABLED
 
@@ -103,7 +103,7 @@ void ModeLoiter::run()
         loiter_nav->set_pilot_desired_acceleration(target_roll, target_pitch);
 
         // get pilot's desired yaw rate
-        if(!CUSTOM_WEATHERVANE) {
+        if(!g_config.custom_weathervane) {
           target_yaw_rate = get_pilot_desired_yaw_rate();
         }
 
@@ -126,7 +126,7 @@ void ModeLoiter::run()
     AltHoldModeState loiter_state = get_alt_hold_state(target_climb_rate);
 
     AC_AttitudeControl::HeadingCommand heading_command;
-    if(CUSTOM_WEATHERVANE) {
+    if(g_config.custom_weathervane) {
         heading_command = Mode::auto_yaw.get_heading();
     }
 
@@ -138,7 +138,7 @@ void ModeLoiter::run()
         attitude_control->reset_yaw_target_and_rate();
         pos_control->relax_z_controller(0.0f);   // forces throttle output to decay to zero
         loiter_nav->init_target();
-        if(CUSTOM_WEATHERVANE) {
+        if(g_config.custom_weathervane) {
           attitude_control->input_thrust_vector_heading(loiter_nav->get_thrust_vector(), heading_command);
         } else {
           attitude_control->input_thrust_vector_rate_heading(loiter_nav->get_thrust_vector(), target_yaw_rate, false);
@@ -152,7 +152,7 @@ void ModeLoiter::run()
     case AltHoldModeState::Landed_Pre_Takeoff:
         attitude_control->reset_rate_controller_I_terms_smoothly();
         loiter_nav->init_target();
-        if(CUSTOM_WEATHERVANE) {
+        if(g_config.custom_weathervane) {
           attitude_control->input_thrust_vector_heading(loiter_nav->get_thrust_vector(), heading_command);
         } else {
           attitude_control->input_thrust_vector_rate_heading(loiter_nav->get_thrust_vector(), target_yaw_rate, false);
@@ -176,7 +176,7 @@ void ModeLoiter::run()
         loiter_nav->update();
 
         // call attitude controller
-        if(CUSTOM_WEATHERVANE) {
+        if(g_config.custom_weathervane) {
           attitude_control->input_thrust_vector_heading(loiter_nav->get_thrust_vector(), heading_command);
         } else {
           attitude_control->input_thrust_vector_rate_heading(loiter_nav->get_thrust_vector(), target_yaw_rate, false);
@@ -208,7 +208,7 @@ void ModeLoiter::run()
 #endif
 
         // call attitude controller
-        if(CUSTOM_WEATHERVANE) {
+        if(g_config.custom_weathervane) {
           attitude_control->input_thrust_vector_heading(loiter_nav->get_thrust_vector(), heading_command);
         } else {
           attitude_control->input_thrust_vector_rate_heading(loiter_nav->get_thrust_vector(), target_yaw_rate, false);

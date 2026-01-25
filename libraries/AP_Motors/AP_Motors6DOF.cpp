@@ -26,7 +26,7 @@
 #include <../ArduPlane/quadplane.h>
 #endif
 
-#include "../../ArduCopter/custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 #include "TVC_Core.h"
 #include "TVC_PID.h"
 #include "TVC_Filters.h"
@@ -232,14 +232,14 @@ bool AP_Motors6DOF::init(uint8_t expected_num_motors) {
 
     // SBL hard-coded
     int wantMotors = 12;
-    if(LATERAL_MOTORS_CONFIG4) {
+    if(g_config.lateral_motors_config4) {
       wantMotors = 8;
     }
-    if (CATERPILLAR_H_FRAME_6DOF) {
+    if (g_config.caterpillar_h_frame_6dof) {
       wantMotors = 9;
     }
     if (ENABLE_TRICOPTER_VTOL_BACKEND) {
-      wantMotors = TRICOPTER_IS_BLIMP ? 3 : 5;
+      wantMotors = g_config.tricopter_is_blimp ? 3 : 5;
     }
     uint8_t num_motors = 0;
     for(uint8_t i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
@@ -276,7 +276,7 @@ void AP_Motors6DOF::setup_motors(motor_frame_class frame_class, motor_frame_type
     const float motorThrottleFactor = 1.0f; // Main thrusting motors contribute 100% to throttle.
     const float noInput         =  0.0f;
 
-    if (TRICOPTER_IS_BLIMP) {
+    if (g_config.tricopter_is_blimp) {
         // --- BLIMP CONFIGURATION ---
         // Motor 1: Right Gondola Lift (DShot)
         // No Roll or Pitch stabilization - rely on inherent buoyancy stability.
@@ -311,10 +311,10 @@ void AP_Motors6DOF::setup_motors(motor_frame_class frame_class, motor_frame_type
     }
 
     int wantMotors = 12;
-    if(LATERAL_MOTORS_CONFIG4) {
+    if(g_config.lateral_motors_config4) {
       wantMotors = 8;
     }
-    if (CATERPILLAR_H_FRAME_6DOF) {
+    if (g_config.caterpillar_h_frame_6dof) {
       wantMotors = 9;
     }
     for(int i=0; i < wantMotors; i++) {
@@ -345,7 +345,7 @@ void AP_Motors6DOF::setup_motors(motor_frame_class frame_class, motor_frame_type
 
     // motor num, roll, pitch, yaw, throttle, forward, lat, test order
 
-    if(!CATERPILLAR_H_FRAME_6DOF) {
+    if(!g_config.caterpillar_h_frame_6dof) {
       // top left
       add_motor_raw_6dof(AP_MOTORS_MOT_1, rollRight, pitchDown, noYaw, 1.0, noForward, noLateral, 1);
       // top right
@@ -356,7 +356,7 @@ void AP_Motors6DOF::setup_motors(motor_frame_class frame_class, motor_frame_type
       add_motor_raw_6dof(AP_MOTORS_MOT_4, rollRight, -pitchDown, noYaw, 1.0, noForward, noLateral, 4);
     }
 
-    if(LATERAL_MOTORS_CONFIG4) {
+    if(g_config.lateral_motors_config4) {
         // bottom
         add_motor_raw_6dof(AP_MOTORS_MOT_5, noRoll, noPitch, yawFactorCCW, 0.0, noForward, lateral, 5);
         // left
@@ -365,7 +365,7 @@ void AP_Motors6DOF::setup_motors(motor_frame_class frame_class, motor_frame_type
         add_motor_raw_6dof(AP_MOTORS_MOT_7, noRoll, noPitch, yawFactorCW, 0.0, noForward, lateral, 7);
         // right
         add_motor_raw_6dof(AP_MOTORS_MOT_8, noRoll, noPitch, yawFactorCCW, 0.0, forward, noLateral, 8);
-    } else if (CATERPILLAR_H_FRAME_6DOF) {
+    } else if (g_config.caterpillar_h_frame_6dof) {
         // top right
         add_motor_raw_6dof(AP_MOTORS_MOT_1, -rollRight, pitchDown, yawFactorCCW, 1.0, noForward, noLateral, 1);
         // middle right
@@ -520,9 +520,9 @@ int16_t AP_Motors6DOF::calc_thrust_to_pwm(float thrust_in, bool reversible) cons
     if(abs(thrust_in) <= DEAD_BAND) {
         thrust_in = 0;
     }
-    int16_t range_up = get_pwm_output_max() - MOT_SPIN_NEUTRAL;
-    int16_t range_down = MOT_SPIN_NEUTRAL - get_pwm_output_min();
-    return MOT_SPIN_NEUTRAL + thrust_in * (thrust_in > 0 ? range_up : range_down);
+    int16_t range_up = get_pwm_output_max() - g_config.mot_spin_neutral;
+    int16_t range_down = g_config.mot_spin_neutral - get_pwm_output_min();
+    return g_config.mot_spin_neutral + thrust_in * (thrust_in > 0 ? range_up : range_down);
 }
 
 void AP_Motors6DOF::output_to_motors()
@@ -534,7 +534,7 @@ void AP_Motors6DOF::output_to_motors()
         motor_out[i] = 0;
     }
 
-    if (TRICOPTER_IS_BLIMP && _plane_inputs.transition_progress > 0.5f) {
+    if (g_config.tricopter_is_blimp && _plane_inputs.transition_progress > 0.5f) {
         // Initialize limits
         limit.roll = false;
         limit.pitch = false;
@@ -547,9 +547,9 @@ void AP_Motors6DOF::output_to_motors()
             _tilt_angle = 0.0f;
             _thrust_rpyt_out[BLIMP_MOT_YAW] = 0.0f;
             
-            motor_out[BLIMP_MOT_LIFT_RIGHT] = MOT_SPIN_MIN;
-            motor_out[BLIMP_MOT_LIFT_LEFT]  = MOT_SPIN_MIN;
-            motor_out[BLIMP_MOT_YAW]        = MOT_SPIN_NEUTRAL;
+            motor_out[BLIMP_MOT_LIFT_RIGHT] = g_config.mot_spin_min;
+            motor_out[BLIMP_MOT_LIFT_LEFT]  = g_config.mot_spin_min;
+            motor_out[BLIMP_MOT_YAW]        = g_config.mot_spin_neutral;
 
             SRV_Channels::set_output_scaled(BLIMP_ELEV_SERVO_FUNC, 0.0f);
         } else {
@@ -594,7 +594,7 @@ void AP_Motors6DOF::output_to_motors()
             // Forward (Neutral): Target Angle. Down: 180 deg. Back: -90 deg.
             
             // Calculate normalized values based on TVC configuration
-            float val_neutral = BLIMP_PLANE_FWD_ANGLE / FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG;
+            float val_neutral = BLIMP_PLANE_FWD_ANGLE / g_config.forward_flight_physical_angle_deg;
             float val_down    = 1.0f;  // 180/180
             float val_back    = -1.0f; // -90/90
 
@@ -643,35 +643,35 @@ void AP_Motors6DOF::output_to_motors()
             // SBL redundant code
             if (motor_enabled[i]) {
 #if ENABLE_TRICOPTER_VTOL_BACKEND
-                if (TRICOPTER_IS_BLIMP) {
+                if (g_config.tricopter_is_blimp) {
                     if (i == BLIMP_MOT_RUDDER || i == BLIMP_MOT_TILT || i == BLIMP_MOT_YAW) { // Servos & Yaw
-                        motor_out[i] = MOT_SPIN_NEUTRAL;
+                        motor_out[i] = g_config.mot_spin_neutral;
                     } else { // Lift (1,2) and Debug (6)
-                        motor_out[i] = MOT_SPIN_MIN;
+                        motor_out[i] = g_config.mot_spin_min;
                     }
                 } else {
                     if(i < 4) {
-                      if(LIFTING_MOTORS_REVERSIBLE) {
-                        motor_out[i] = MOT_SPIN_NEUTRAL;
+                      if(g_config.lifting_motors_reversible) {
+                        motor_out[i] = g_config.mot_spin_neutral;
                       } else {
-                        motor_out[i] = MOT_SPIN_MIN;
+                        motor_out[i] = g_config.mot_spin_min;
                       }
                     } else {
-                      motor_out[i] = MOT_SPIN_NEUTRAL; // Tilt servo
+                      motor_out[i] = g_config.mot_spin_neutral; // Tilt servo
                     }
                 }
 #else
                 if(i < 4) {
-                  if(LIFTING_MOTORS_REVERSIBLE) {
-                    motor_out[i] = MOT_SPIN_NEUTRAL;
+                  if(g_config.lifting_motors_reversible) {
+                    motor_out[i] = g_config.mot_spin_neutral;
                   } else {
-                    motor_out[i] = MOT_SPIN_MIN;
+                    motor_out[i] = g_config.mot_spin_min;
                   }
                 } else {
-                  if(LATERAL_MOTORS_CONFIG4) {
-                    motor_out[i] = MOT_SPIN_NEUTRAL;
+                  if(g_config.lateral_motors_config4) {
+                    motor_out[i] = g_config.mot_spin_neutral;
                   } else {
-                    motor_out[i] = MOT_SPIN_MIN;
+                    motor_out[i] = g_config.mot_spin_min;
                   }
                 }
 #endif
@@ -685,7 +685,7 @@ void AP_Motors6DOF::output_to_motors()
         for (i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) {
             if (motor_enabled[i]) {
             #if ENABLE_TRICOPTER_VTOL_BACKEND
-                if (TRICOPTER_IS_BLIMP) {
+                if (g_config.tricopter_is_blimp) {
                     if (i == BLIMP_MOT_TILT) { 
                                                     // Motor 5: Tilt Servo (SRV_Channel Interpolation)
                                                     SRV_Channel::Aux_servo_function_t func = SRV_Channels::get_motor_function(i);
@@ -722,7 +722,7 @@ void AP_Motors6DOF::output_to_motors()
                                 } else {
                                     // Lift Motors 1 & 2 (Unidirectional, rely on Vectoring for direction)
                                     // Pass absolute magnitude so they spin up for negative (downward) thrust
-                                    motor_out[i] = calc_thrust_to_pwm(fabsf(_thrust_rpyt_out[i]), LIFTING_MOTORS_REVERSIBLE);
+                                    motor_out[i] = calc_thrust_to_pwm(fabsf(_thrust_rpyt_out[i]), g_config.lifting_motors_reversible);
                                 }
                                             } else {
                                                 // Standard Tricopter VTOL Logic
@@ -744,15 +744,15 @@ void AP_Motors6DOF::output_to_motors()
                                                                                 }                                                } else {
                         // Standard logic for other motors
                         // Force Yaw to be reversible.
-                        bool is_reversible = (i == BLIMP_MOT_YAW) ? true : LIFTING_MOTORS_REVERSIBLE;
+                        bool is_reversible = (i == BLIMP_MOT_YAW) ? true : g_config.lifting_motors_reversible;
                         motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], is_reversible);
                     }
                 }
 #else
                 if(i < 4) {
-                    motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], LIFTING_MOTORS_REVERSIBLE);
+                    motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], g_config.lifting_motors_reversible);
                 } else {
-                    motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], LATERAL_MOTORS_CONFIG4);
+                    motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], g_config.lateral_motors_config4);
                 }
 #endif
             }
@@ -769,7 +769,7 @@ void AP_Motors6DOF::output_to_motors()
     }
 
 #if ENABLE_TRICOPTER_VTOL_BACKEND
-    if (TRICOPTER_IS_BLIMP) {
+    if (g_config.tricopter_is_blimp) {
         if (_spool_state == SpoolState::SHUT_DOWN) {
             _tilt_angle = 0.0f;
             _current_tilt_deg = 0.0f;
@@ -818,13 +818,13 @@ void AP_Motors6DOF::output_armed_stabilizing()
         roll_thrust = (_roll_in + _roll_in_ff);
         pitch_thrust = (_pitch_in + _pitch_in_ff);
         yaw_thrust = (_yaw_in + _yaw_in_ff);
-        if(LIFTING_MOTORS_REVERSIBLE || TRICOPTER_IS_BLIMP) {
+        if(g_config.lifting_motors_reversible || g_config.tricopter_is_blimp) {
             throttle_thrust = get_throttle_bidirectional();
         } else {
             float compensation_gain = 1.0;
             // thrust linearization accounted for on the end motor controller
             // units.
-            if(!CATERPILLAR_H_FRAME_6DOF && !ENABLE_TRICOPTER_VTOL_BACKEND) {
+            if(!g_config.caterpillar_h_frame_6dof && !ENABLE_TRICOPTER_VTOL_BACKEND) {
               compensation_gain = thr_lin.get_compensation_gain(); // compensation for battery voltage and altitude
             }
                         throttle_thrust = get_throttle() * compensation_gain;
@@ -835,12 +835,16 @@ void AP_Motors6DOF::output_armed_stabilizing()
             // ENABLE_TRICOPTER_VTOL_BACKEND block moved down after standard input assignment
             
                     // --- In-Flight PID Tuning Pass-through ---
-                            #if CATERPILLAR_H_FRAME_6DOF
+                            if (g_config.caterpillar_h_frame_6dof) {
                                 // Read the raw PWM from the pilot's RC inputs for the tuning channels
                                 // and place them directly into the output array for SBUS broadcast.
+                                #if SBUS_OUTPUT_TUNING_SELECTOR_CHAN < AP_MOTORS_MAX_NUM_MOTORS
                                 _thrust_rpyt_out[SBUS_OUTPUT_TUNING_SELECTOR_CHAN] = pwm_to_thrust_float(hal.rcin->read(RC_INPUT_TUNING_SELECTOR_CHAN));
+                                #endif
+                                #if SBUS_OUTPUT_TUNING_VALUE_CHAN < AP_MOTORS_MAX_NUM_MOTORS
                                 _thrust_rpyt_out[SBUS_OUTPUT_TUNING_VALUE_CHAN] = pwm_to_thrust_float(hal.rcin->read(RC_INPUT_TUNING_VALUE_CHAN));
-                            #endif
+                                #endif
+                            }
                     
                             forward_thrust = _forward_in;        lateral_thrust = _lateral_in;
 
@@ -877,7 +881,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     _manual_override_active = false;
                     
                     // --- TVC Integration (Standard Logic) ---
-                    if (TRICOPTER_IS_BLIMP) {
+                    if (g_config.tricopter_is_blimp) {
                         // Scale forward/lateral inputs by 2.0 to overcome Q_ANGLE_MAX limitation (sin(30)=0.5).
                         // This allows full +/- 1.0 input authority for vectoring.
                         forward_thrust *= 2.0f;
@@ -925,7 +929,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
                     // Override Throttle with Total Vector Magnitude (Motors 1 & 2)
                     throttle_thrust = tvc_outputs.total_throttle;
 
-                    if (TRICOPTER_IS_BLIMP) {
+                    if (g_config.tricopter_is_blimp) {
                         // --- Slew Limiter & Transient Thrust Mitigation ---
                         float tilt_rate = 40.0f; // Default fallback matching Q_TILT_RATE_UP
                         QuadPlane *qp = QuadPlane::get_singleton();
@@ -969,7 +973,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
         limit.throttle_upper = false;
 
         // sanity check throttle is above zero and below current limited throttle
-        if(LIFTING_MOTORS_REVERSIBLE || TRICOPTER_IS_BLIMP) {
+        if(g_config.lifting_motors_reversible || g_config.tricopter_is_blimp) {
             if (throttle_thrust <= -_throttle_thrust_max) {
                 throttle_thrust = -_throttle_thrust_max;
                 limit.throttle_lower = true;
@@ -991,7 +995,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
         // so limiting to 0.5 prevents some motors getting saturated while others are not.
         float yaw_limit = 0.5f;
 #if ENABLE_TRICOPTER_VTOL_BACKEND
-        if (TRICOPTER_IS_BLIMP) {
+        if (g_config.tricopter_is_blimp) {
             yaw_limit = 1.0f;
         }
 #endif
@@ -1028,7 +1032,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
             if (motor_enabled[i]) {
                 float local_forward_thrust = forward_thrust;
                 float local_lateral_thrust = lateral_thrust;
-                if(!LATERAL_MOTORS_CONFIG4 && !ENABLE_TRICOPTER_VTOL_BACKEND) {
+                if(!g_config.lateral_motors_config4 && !ENABLE_TRICOPTER_VTOL_BACKEND) {
                     if(local_forward_thrust * _forward_factor[i] < 0) {
                         local_forward_thrust = 0;
                     }
@@ -1191,13 +1195,13 @@ void AP_Motors6DOF::output_armed_stabilizing_vectored_6dof()
     roll_thrust = (_roll_in + _roll_in_ff);
     pitch_thrust = (_pitch_in + _pitch_in_ff);
     yaw_thrust = (_yaw_in + _yaw_in_ff);
-    if(LIFTING_MOTORS_REVERSIBLE) {
+    if(g_config.lifting_motors_reversible) {
         throttle_thrust = get_throttle_bidirectional();
     } else {
         float compensation_gain = 1.0;
         // thrust linearization accounted for on the end motor controller
         // units.
-        if(!CATERPILLAR_H_FRAME_6DOF && !ENABLE_TRICOPTER_VTOL_BACKEND) {
+        if(!g_config.caterpillar_h_frame_6dof && !ENABLE_TRICOPTER_VTOL_BACKEND) {
           compensation_gain = thr_lin.get_compensation_gain(); // compensation for battery voltage and altitude
         }
         throttle_thrust = get_throttle() * compensation_gain;

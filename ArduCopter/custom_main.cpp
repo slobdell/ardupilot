@@ -199,16 +199,16 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
     // This uses a piecewise function to correctly handle asymmetric ranges.
     float vector_pitch_out;
     if (target_pitch_deg >= 0) {
-        vector_pitch_out = target_pitch_deg / FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG;
+        vector_pitch_out = target_pitch_deg / g_config.forward_flight_physical_angle_deg;
     } else {
-        vector_pitch_out = target_pitch_deg / fabsf(REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG);
+        vector_pitch_out = target_pitch_deg / fabsf(g_config.reverse_flight_physical_angle_deg);
     }
 
     float vector_roll_out;
     if (target_roll_deg >= 0) {
-        vector_roll_out = target_roll_deg / FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG;
+        vector_roll_out = target_roll_deg / g_config.forward_flight_physical_angle_deg;
     } else {
-        vector_roll_out = target_roll_deg / fabsf(REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG);
+        vector_roll_out = target_roll_deg / fabsf(g_config.reverse_flight_physical_angle_deg);
     }
 #endif
 
@@ -252,7 +252,7 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const
 
     // Model B: Forward Flight Control (Fixed Angle Command)
     // This command represents the maximum physical forward tilt.
-    float fw_model_pitch_output = FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG / FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG; // Should be 1.0f
+    float fw_model_pitch_output = g_config.forward_flight_physical_angle_deg / g_config.forward_flight_physical_angle_deg; // Should be 1.0f
     float fw_model_roll_output = 0.0f; // No roll command in forward flight from TVC
 
     // Linearly interpolate between the two model outputs.

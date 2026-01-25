@@ -3,7 +3,7 @@
 #include <stdint.h> // For uint32_t etc.
 #include <algorithm> // For std::min/max
 #include <cmath> // For M_PI
-#include "../../ArduCopter/custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 // SBUS PWM Value Ranges used by helper functions
 const int SBUS_MIN_PWM = 1000;

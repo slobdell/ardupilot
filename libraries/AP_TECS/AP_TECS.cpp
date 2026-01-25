@@ -1,6 +1,6 @@
 #include "AP_TECS.h"
 #include <AP_HAL/AP_HAL.h>
-#include "../../ArduCopter/custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 #include <AP_Baro/AP_Baro.h>
 #include <AP_Logger/AP_Logger.h>
 #include <AP_Landing/AP_Landing.h>
@@ -438,7 +438,7 @@ void AP_TECS::_update_speed(float DT)
     // limit the airspeed to a minimum of 3 m/s
     float min_airspeed = 3.0;
 #if ENABLE_TRICOPTER_VTOL_BACKEND
-    if (TRICOPTER_IS_BLIMP) {
+    if (g_config.tricopter_is_blimp) {
         min_airspeed = 0.0f;
     }
 #endif

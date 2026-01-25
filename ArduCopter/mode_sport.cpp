@@ -1,5 +1,5 @@
 #include "Copter.h"
-#include "custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 #if MODE_SPORT_ENABLED
 
@@ -39,7 +39,7 @@ void ModeSport::run_OBSOLETE()
     float target_pitch_rate = channel_pitch->get_control_in() * g2.command_model_acro_rp.get_rate() * 100.0 / ROLL_PITCH_YAW_INPUT_MAX;
 
     // SBL CUSTOM HACKS
-    if(FORCE_6DOF_ATTITUDE_CONTROLLER) {
+    if(g_config.force_6dof_attitude_controller) {
       target_roll_rate = 0;
       target_pitch_rate = 0;
     }
@@ -132,7 +132,7 @@ void ModeSport::run_OBSOLETE()
     pos_control->update_z_controller();
 
     // SBL CUSTOM HACK
-    if(FORCE_6DOF_ATTITUDE_CONTROLLER) {
+    if(g_config.force_6dof_attitude_controller) {
         motors->set_forward(-0.5 * channel_pitch->norm_input_dz());
         motors->set_lateral(0.5 * channel_roll->norm_input_dz());
     }
@@ -326,7 +326,7 @@ void ModeSport::get_pilot_desired_angle_rates(float roll_in, float pitch_in, flo
 
             // Calculate rate limit to prevent change of rate through inverted
             rate_limit = fabsf(fabsf(rate_bf_request_cd.z)-fabsf(rate_bf_level_cd.z));
-            rate_bf_request_cd.z += rate_bf_level_cd.z * ACRO_YAW_GAIN;
+            rate_bf_request_cd.z += rate_bf_level_cd.z * g_config.acro_yaw_gain;
             rate_bf_request_cd.z = constrain_float(rate_bf_request_cd.z, -rate_limit, rate_limit);
         }
     }

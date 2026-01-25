@@ -3,7 +3,7 @@
 #if HAL_QUADPLANE_ENABLED
 
 #include <AP_Motors/AP_Motors6DOF.h>
-#include "../../ArduCopter/custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 #if ENABLE_TRICOPTER_VTOL_BACKEND
 #include <AC_AttitudeControl/AC_AttitudeControl_Multi_6DoF.h>
@@ -1010,9 +1010,9 @@ void QuadPlane::hold_stabilize(float throttle_in)
     // call attitude controller
     multicopter_attitude_rate_update(get_desired_yaw_rate_cds(false));
 
-    bool is_reversible = LIFTING_MOTORS_REVERSIBLE;
+    bool is_reversible = g_config.lifting_motors_reversible;
 #if ENABLE_TRICOPTER_VTOL_BACKEND
-    is_reversible |= TRICOPTER_IS_BLIMP;
+    is_reversible |= g_config.tricopter_is_blimp;
 #endif
 
     if ((throttle_in <= 0) && !air_mode_active() && !is_reversible) {
@@ -1120,7 +1120,7 @@ float QuadPlane::get_pilot_throttle()
     throttle_in /= plane.channel_throttle->get_range();
 
 #if ENABLE_TRICOPTER_VTOL_BACKEND
-    if (TRICOPTER_IS_BLIMP && in_vtol_mode()) {
+    if (g_config.tricopter_is_blimp && in_vtol_mode()) {
         return throttle_in;
     }
 #endif
@@ -1717,7 +1717,7 @@ void QuadPlane::update(void)
 
 #if ENABLE_TRICOPTER_VTOL_BACKEND
     // Inject Plane Demands for Unified Mixing (Run Unconditionally)
-    if (TRICOPTER_IS_BLIMP) {
+    if (g_config.tricopter_is_blimp) {
         AP_Motors6DOF::PlaneInputs plane_inputs;
         plane_inputs.pitch_cd = plane.nav_pitch_cd;
         plane_inputs.roll_cd = plane.nav_roll_cd;
@@ -1782,7 +1782,7 @@ void QuadPlane::update(void)
             // in manual modes quad motors are always off
             if (!tailsitter.enabled()) {
 #if ENABLE_TRICOPTER_VTOL_BACKEND
-                if (TRICOPTER_IS_BLIMP) {
+                if (g_config.tricopter_is_blimp) {
                      set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
                 } else 
 #endif
@@ -1871,7 +1871,7 @@ void QuadPlane::update(void)
 void QuadPlane::update_throttle_suppression(void)
 {
 #if ENABLE_TRICOPTER_VTOL_BACKEND
-    if (TRICOPTER_IS_BLIMP) {
+    if (g_config.tricopter_is_blimp) {
         return;
     }
 #endif

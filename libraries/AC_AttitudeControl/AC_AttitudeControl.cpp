@@ -2,7 +2,7 @@
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 #include <AP_Scheduler/AP_Scheduler.h>
-#include "../../ArduCopter/custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -697,7 +697,7 @@ void AC_AttitudeControl::input_thrust_vector_rate_heading(const Vector3f& thrust
     Vector3f attitude_error;
     float returned_thrust_vector_angle;
     thrust_vector_rotation_angles(thrust_vec_quat, _attitude_target, thrust_vec_correction_quat, attitude_error, returned_thrust_vector_angle, thrust_vector_diff_angle);
-    if(DISABLE_POSITION_HEADING_LOITER) {
+    if(g_config.disable_position_heading_loiter) {
         attitude_error.z = 0.0f;
     }
 
@@ -729,7 +729,7 @@ void AC_AttitudeControl::input_thrust_vector_rate_heading(const Vector3f& thrust
     ang_vel_to_euler_rate(_attitude_target, _ang_vel_target, _euler_rate_target);
 
     // Call quaternion attitude controller
-    attitude_controller_run_quat(DISABLE_POSITION_HEADING_LOITER);
+    attitude_controller_run_quat(g_config.disable_position_heading_loiter);
 }
 
 // Command a thrust vector, heading and heading rate
@@ -850,7 +850,7 @@ void AC_AttitudeControl::attitude_controller_run_quat(bool disable_position_head
     // This vector represents the angular error to rotate the thrust vector using x and y and heading using z
     Vector3f attitude_error;
     thrust_heading_rotation_angles(_attitude_target, attitude_body, attitude_error, _thrust_angle, _thrust_error_angle);
-    if(disable_position_heading && DISABLE_POSITION_HEADING_LOITER) {
+    if(disable_position_heading && g_config.disable_position_heading_loiter) {
         attitude_error.z = 0.0f;
     }
 

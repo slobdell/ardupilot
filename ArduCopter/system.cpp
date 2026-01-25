@@ -4,7 +4,7 @@
 // SBL add
 #include <GCS_MAVLink/GCS_MAVLink.h>    // MAVLink GCS definitions
 #include <AP_HAL/AP_HAL.h>
-#include "custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 #if ENABLE_TRICOPTER_VTOL_BACKEND
 #error "ENABLE_TRICOPTER_VTOL_BACKEND can only be used with ArduPlane builds"
@@ -388,7 +388,7 @@ bool Copter::should_log(uint32_t mask)
  */
 void Copter::allocate_motors(void)
 {
-    if(FORCE_6DOF_ATTITUDE_CONTROLLER) {
+    if(g_config.force_6dof_attitude_controller) {
         //gcs().send_text(MAV_SEVERITY_INFO,"SBL allocate motors");
         motors = NEW_NOTHROW AP_Motors6DOF(copter.scheduler.get_loop_rate_hz());
         motors_var_info = AP_Motors6DOF::var_info;
@@ -470,7 +470,7 @@ void Copter::allocate_motors(void)
         AP_BoardConfig::allocation_error("AP_AHRS_View");
     }
 
-    if(FORCE_6DOF_ATTITUDE_CONTROLLER) {
+    if(g_config.force_6dof_attitude_controller) {
         attitude_control = NEW_NOTHROW AC_AttitudeControl_Multi_6DoF(*ahrs_view, aparm, *motors);
         attitude_control_var_info = AC_AttitudeControl_Multi_6DoF::var_info;
     } else {

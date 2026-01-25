@@ -35,11 +35,11 @@ These flags control the primary operating mode of the TVC.
 
 These constants define the TVC's understanding of the system's **intended maximum flight envelope**. These values are used to normalize the TVC's commands into a generic `-1.0` to `1.0` range.
 
--   `const float FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG`:
+-   `const float g_config.forward_flight_physical_angle_deg`:
     -   **Purpose:** Defines the maximum physical forward tilt angle (in degrees) the system is designed to achieve in forward flight.
     -   **Example:** `93.0f`
 
--   `const float REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG`:
+-   `const float g_config.reverse_flight_physical_angle_deg`:
     -   **Purpose:** Defines the maximum physical reverse/negative tilt angle (in degrees) the system is designed to achieve.
     -   **Example:** `-10.0f`
 
@@ -133,8 +133,8 @@ This is the new configuration using servos for tilting.
     #define OPEN_LOOP_SERVO_MODE true
 
     // Set these to match the system's intended flight envelope
-    const float FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG = 93.0f;
-    const float REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG = -10.0f;
+    const float g_config.forward_flight_physical_angle_deg = 93.0f;
+    const float g_config.reverse_flight_physical_angle_deg = -10.0f;
     ```
 
 2.  **SFC Settings (`motor-controller-unit.ino`):**

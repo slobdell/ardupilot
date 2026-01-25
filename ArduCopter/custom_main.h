@@ -130,11 +130,6 @@ const float MAX_SAFE_ANGLE_RAD = MAX_TARGET_ANGLE_DEG * (M_PI / 180.0);
 const float MAX_THRUST_FACTOR = 1.0f / cosf(MAX_SAFE_ANGLE_RAD);
 const float max_tan_angle = tanf(MAX_TARGET_ANGLE_DEG * M_PI / 180.0);
 
-// NEW: Physical angle limits for the system's full range of motion.
-// These define the maximum positive and negative physical tilt angles the system is designed to achieve.
-const float FORWARD_FLIGHT_PHYSICAL_ANGLE_DEG = 93.0f; // Example: Max forward tilt for cruise
-const float REVERSE_FLIGHT_PHYSICAL_ANGLE_DEG = -10.0f; // Example: Max reverse tilt
-
 // =============================================================================
 // --- HELPER PROTOTYPES (Internal to this file) ---
 // =============================================================================

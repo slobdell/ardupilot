@@ -17,10 +17,10 @@ The fundamental principle of this design is that the PFC is not aware of the spe
 
 ### 3.1. Master Feature Flag
 
-A new feature flag has been added to `ArduCopter/custom_config.h` to control the entire feature set:
+A new feature flag has been added to `libraries/AP_CustomConfig/AP_CustomConfig.h` to control the entire feature set:
 
 ```cpp
-// ArduCopter/custom_config.h
+// libraries/AP_CustomConfig/AP_CustomConfig.h
 #define ENABLE_TRICOPTER_VTOL_BACKEND 1
 ```
 

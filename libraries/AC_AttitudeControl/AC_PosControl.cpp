@@ -5,7 +5,7 @@
 #include <AP_Motors/AP_Motors.h>    // motors library
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 #include <AP_Scheduler/AP_Scheduler.h>
-#include "../../ArduCopter/custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -807,7 +807,7 @@ void AC_PosControl::init_z_controller_stopping_point()
 ///     This function decays the output acceleration by 95% every half second to achieve a smooth transition to zero requested acceleration.
 void AC_PosControl::relax_z_controller(float throttle_setting)
 {
-    if(LIFTING_MOTORS_REVERSIBLE && throttle_setting == 0.0) {
+    if(g_config.lifting_motors_reversible && is_zero(throttle_setting)) {
         throttle_setting = 0.5;
     }
     // Initialise the position controller to the current position, velocity and acceleration.
@@ -1045,7 +1045,7 @@ void AC_PosControl::update_z_controller()
     }
     thr_out += _motors.get_throttle_hover();
 
-    if(LIFTING_MOTORS_REVERSIBLE) {
+    if(g_config.lifting_motors_reversible) {
         const float thr_mid = 0.5;
         if(_accel_target.z > 0 && thr_out < thr_mid) {
             thr_out = thr_mid;

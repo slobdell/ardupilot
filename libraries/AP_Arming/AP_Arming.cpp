@@ -60,7 +60,7 @@
 #include <AP_KDECAN/AP_KDECAN.h>
 #include <AP_Vehicle/AP_Vehicle.h>
 // have not tested if this willcompile
-#include "../../ArduCopter/custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 #if HAL_MAX_CAN_PROTOCOL_DRIVERS
   #include <AP_CANManager/AP_CANManager.h>
@@ -632,7 +632,7 @@ bool AP_Arming::gps_checks(bool report)
             }
 
             //GPS update rate acceptable
-            if(!INDOOR_AIRCRAFT) {
+            if(!g_config.indoor_aircraft) {
                 if (!gps.is_healthy(i)) {
                     check_failed(ARMING_CHECK_GPS, report, "GPS %i: not healthy", i+1);
                     return false;

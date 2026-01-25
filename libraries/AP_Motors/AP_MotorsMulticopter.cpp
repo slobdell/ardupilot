@@ -18,7 +18,7 @@
 #include <AP_BattMonitor/AP_BattMonitor.h>
 #include <SRV_Channel/SRV_Channel.h>
 #include <AP_Logger/AP_Logger.h>
-#include "../../ArduCopter/custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 #if APM_BUILD_TYPE(APM_BUILD_ArduPlane)
@@ -645,11 +645,11 @@ void AP_MotorsMulticopter::output_logic()
 
         // constrain ramp value and update mode
         float throttle_demand = get_throttle();
-        if (LIFTING_MOTORS_REVERSIBLE) {
+        if (g_config.lifting_motors_reversible) {
              throttle_demand = fabsf(get_throttle_bidirectional());
         }
 #if ENABLE_TRICOPTER_VTOL_BACKEND
-        else if (TRICOPTER_IS_BLIMP) {
+        else if (g_config.tricopter_is_blimp) {
             throttle_demand = fabsf(get_throttle_bidirectional());
         }
 #endif

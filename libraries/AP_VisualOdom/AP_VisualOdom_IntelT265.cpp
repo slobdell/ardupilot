@@ -23,7 +23,7 @@
 #include <AP_AHRS/AP_AHRS.h>
 #include <GCS_MAVLink/GCS.h>
 
-#include "../../ArduCopter/custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 #define VISUALODOM_RESET_IGNORE_DURATION_MS 1000    // sensor data is ignored for 1sec after a position reset
 
@@ -201,7 +201,7 @@ void AP_VisualOdom_IntelT265::rotate_attitude(Quaternion &attitude) const
 // use sensor provided attitude to calculate rotation to align sensor with AHRS/EKF attitude
 bool AP_VisualOdom_IntelT265::align_yaw_to_ahrs(const Vector3f &position, const Quaternion &attitude)
 {
-    if(!VISODOM_PRIMARY_COMPASS) {
+    if(!g_config.visodom_primary_compass) {
         // do not align to ahrs if we are its yaw source
         if (AP::ahrs().using_extnav_for_yaw()) {
             return false;
@@ -218,7 +218,7 @@ bool AP_VisualOdom_IntelT265::align_yaw_to_ahrs(const Vector3f &position, const 
         return false;
     }
     // SBL change here - align to 0 and assume drone is oriented to true north
-    if(VISODOM_PRIMARY_COMPASS) {
+    if(g_config.visodom_primary_compass) {
         if (AP::ahrs().using_extnav_for_yaw()) {
             gcs().send_text(MAV_SEVERITY_INFO, "VisOdom: aligning yaw to 0");
             align_yaw(position, attitude, 0);

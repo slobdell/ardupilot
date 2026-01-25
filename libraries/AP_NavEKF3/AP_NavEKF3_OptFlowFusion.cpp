@@ -8,7 +8,7 @@
 
 #include <GCS_MAVLink/GCS.h>
 #include <AP_DAL/AP_DAL.h>
-#include "../../ArduCopter/custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 /********************************************************
 *                   RESET FUNCTIONS                     *
@@ -94,11 +94,11 @@ void NavEKF3_core::EstimateTerrainOffset(const of_elements &ofDataDelayed)
         inhibitGndState = false;
 
         ftype tnb_z = prevTnb.c.z;
-        if (OPTICAL_FLOW_STABILIZED_ROLL || OPTICAL_FLOW_STABILIZED_PITCH) {
+        if (g_config.optical_flow_stabilized_roll || g_config.optical_flow_stabilized_pitch) {
             ftype roll, pitch, yaw;
             stateStruct.quat.to_euler(roll, pitch, yaw);
-            ftype effective_roll = OPTICAL_FLOW_STABILIZED_ROLL ? 0.0f : roll;
-            ftype effective_pitch = OPTICAL_FLOW_STABILIZED_PITCH ? 0.0f : pitch;
+            ftype effective_roll = g_config.optical_flow_stabilized_roll ? 0.0f : roll;
+            ftype effective_pitch = g_config.optical_flow_stabilized_pitch ? 0.0f : pitch;
             tnb_z = cosf(effective_roll) * cosf(effective_pitch);
         }
 
@@ -129,12 +129,12 @@ void NavEKF3_core::EstimateTerrainOffset(const of_elements &ofDataDelayed)
             ftype q1 = stateStruct.quat[1]; // quaternion at optical flow measurement time
             ftype q2 = stateStruct.quat[2]; // quaternion at optical flow measurement time
             ftype q3 = stateStruct.quat[3]; // quaternion at optical flow measurement time
-            if(OPTICAL_FLOW_STABILIZED_ROLL || OPTICAL_FLOW_STABILIZED_PITCH) {
+            if(g_config.optical_flow_stabilized_roll || g_config.optical_flow_stabilized_pitch) {
               Vector3F eulerAngles;
               QuaternionF tmpQuat;
               stateStruct.quat.to_euler(eulerAngles);
-              ftype eff_roll = (OPTICAL_FLOW_STABILIZED_ROLL) ? 0.0f : eulerAngles.x;
-              ftype eff_pitch = (OPTICAL_FLOW_STABILIZED_PITCH) ? 0.0f : eulerAngles.y;
+              ftype eff_roll = (g_config.optical_flow_stabilized_roll) ? 0.0f : eulerAngles.x;
+              ftype eff_pitch = (g_config.optical_flow_stabilized_pitch) ? 0.0f : eulerAngles.y;
               tmpQuat.from_euler(eff_roll, eff_pitch, eulerAngles.z);
               q0 = tmpQuat[0];
               q1 = tmpQuat[1];
@@ -191,12 +191,12 @@ void NavEKF3_core::EstimateTerrainOffset(const of_elements &ofDataDelayed)
             ftype K_OPT;
             ftype H_OPT;
             Vector2F auxFlowObsInnovVar;
-            if(OPTICAL_FLOW_STABILIZED_ROLL || OPTICAL_FLOW_STABILIZED_PITCH) {
+            if(g_config.optical_flow_stabilized_roll || g_config.optical_flow_stabilized_pitch) {
               Vector3F eulerAngles;
               QuaternionF tmpQuat;
               stateStruct.quat.to_euler(eulerAngles);
-              ftype eff_roll = (OPTICAL_FLOW_STABILIZED_ROLL) ? 0.0f : eulerAngles.x;
-              ftype eff_pitch = (OPTICAL_FLOW_STABILIZED_PITCH) ? 0.0f : eulerAngles.y;
+              ftype eff_roll = (g_config.optical_flow_stabilized_roll) ? 0.0f : eulerAngles.x;
+              ftype eff_pitch = (g_config.optical_flow_stabilized_pitch) ? 0.0f : eulerAngles.y;
               tmpQuat.from_euler(eff_roll, eff_pitch, eulerAngles.z);
               q0 = tmpQuat[0];
               q1 = tmpQuat[1];
@@ -323,12 +323,12 @@ void NavEKF3_core::FuseOptFlow(const of_elements &ofDataDelayed, bool really_fus
     ftype q1 = stateStruct.quat[1];
     ftype q2 = stateStruct.quat[2];
     ftype q3 = stateStruct.quat[3];
-    if(OPTICAL_FLOW_STABILIZED_ROLL || OPTICAL_FLOW_STABILIZED_PITCH) {
+    if(g_config.optical_flow_stabilized_roll || g_config.optical_flow_stabilized_pitch) {
       Vector3F eulerAngles;
       QuaternionF tmpQuat;
       stateStruct.quat.to_euler(eulerAngles);
-      ftype eff_roll = (OPTICAL_FLOW_STABILIZED_ROLL) ? 0.0f : eulerAngles.x;
-      ftype eff_pitch = (OPTICAL_FLOW_STABILIZED_PITCH) ? 0.0f : eulerAngles.y;
+      ftype eff_roll = (g_config.optical_flow_stabilized_roll) ? 0.0f : eulerAngles.x;
+      ftype eff_pitch = (g_config.optical_flow_stabilized_pitch) ? 0.0f : eulerAngles.y;
       tmpQuat.from_euler(eff_roll, eff_pitch, eulerAngles.z);
       q0 = tmpQuat[0];
       q1 = tmpQuat[1];
@@ -341,11 +341,11 @@ void NavEKF3_core::FuseOptFlow(const of_elements &ofDataDelayed, bool really_fus
     ftype pd = stateStruct.position.z;
 
     ftype tnb_z = prevTnb.c.z;
-    if (OPTICAL_FLOW_STABILIZED_ROLL || OPTICAL_FLOW_STABILIZED_PITCH) {
+    if (g_config.optical_flow_stabilized_roll || g_config.optical_flow_stabilized_pitch) {
         ftype roll, pitch, yaw;
         stateStruct.quat.to_euler(roll, pitch, yaw);
-        ftype effective_roll = OPTICAL_FLOW_STABILIZED_ROLL ? 0.0f : roll;
-        ftype effective_pitch = OPTICAL_FLOW_STABILIZED_PITCH ? 0.0f : pitch;
+        ftype effective_roll = g_config.optical_flow_stabilized_roll ? 0.0f : roll;
+        ftype effective_pitch = g_config.optical_flow_stabilized_pitch ? 0.0f : pitch;
         tnb_z = cosf(effective_roll) * cosf(effective_pitch);
     }
 

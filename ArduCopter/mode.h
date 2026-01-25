@@ -8,7 +8,7 @@
 #include "afs_copter.h"
 #endif
 
-#include "custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 class Parameters;
 class ParametersG2;

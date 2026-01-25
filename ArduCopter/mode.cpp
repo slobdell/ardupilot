@@ -1,5 +1,5 @@
 #include "Copter.h"
-#include "custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 /*
  * High level calls to set and update flight modes logic for individual
@@ -931,7 +931,7 @@ float Mode::get_pilot_desired_throttle() const
     // calculate normalised throttle input
     float throttle_in;
     bool isNegative = false;
-    if(LIFTING_MOTORS_REVERSIBLE || TRICOPTER_IS_BLIMP) {
+    if(g_config.lifting_motors_reversible || g_config.tricopter_is_blimp) {
         if(throttle_control < mid_stick) {
             isNegative = true;
         }
@@ -951,7 +951,7 @@ float Mode::get_pilot_desired_throttle() const
     const float expo = constrain_float(-(thr_mid-0.5f)/0.375f, -0.5f, 1.0f);
     // calculate the output throttle using the given expo function
     float throttle_out = throttle_in*(1.0f-expo) + expo*throttle_in*throttle_in*throttle_in;
-    if(LIFTING_MOTORS_REVERSIBLE || TRICOPTER_IS_BLIMP) {
+    if(g_config.lifting_motors_reversible || g_config.tricopter_is_blimp) {
         throttle_out *= 0.5;
         if(isNegative) {
             return 0.5 - throttle_out;

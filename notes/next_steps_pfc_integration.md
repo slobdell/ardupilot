@@ -30,7 +30,7 @@ A new motor backend is required to house our custom SBUS output logic.
 
 To safely manage this custom code, a new, high-level feature flag must be added.
 
-1.  **Create Custom Config Header:** If it doesn't exist, create a file like `ardupilot/ArduCopter/custom_config.h`.
+1.  **Create Custom Config Header:** If it doesn't exist, create a file like `ardupilAP_CustomConfig/AP_CustomConfig.h`.
 2.  **Define Flag:** Add a new flag: `#define ENABLE_TRICOPTER_VTOL_BACKEND 1`.
 3.  **Integrate Flag:** In the main `ArduCopter.cpp` (or equivalent vehicle-specific file where the motor mixer is initialized), use this flag to conditionally instantiate our new `AP_MotorsTricopterVTOL` class instead of the default mixer.
 

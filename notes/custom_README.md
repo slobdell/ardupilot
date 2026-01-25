@@ -33,12 +33,12 @@ void Copter::update_flight_mode()
 A key feature of this architecture is the ability to switch between a standard ArduPilot configuration mode and our custom application mode.
 
 - **To Configure/Calibrate:**
-  1. Set `RUN_CUSTOM_LOOP` to `false` in `ArduCopter/custom_config.h`.
+  1. Set `RUN_CUSTOM_LOOP` to `false` in `libraries/AP_CustomConfig/AP_CustomConfig.h`.
   2. Build and flash the firmware.
   3. The board will now run standard ArduCopter. Connect to it with Mission Planner or QGroundControl to perform sensor calibrations, set parameters (e.g., for serial ports), and configure any attached hardware.
 
 - **To Run the Custom Application:**
-  1. Set `RUN_CUSTOM_LOOP` to `true` in `ArduCopter/custom_config.h`.
+  1. Set `RUN_CUSTOM_LOOP` to `true` in `libraries/AP_CustomConfig/AP_CustomConfig.h`.
   2. Build and flash the firmware.
   3. The board will boot with all the saved settings, but will execute the `newMain()` function instead of the standard flight modes.
 
@@ -119,7 +119,7 @@ Plain-text logging is configured to output on `SERIAL7` (physical port UART8).
 
 ## 5. Key Project Files
 
-- `ArduCopter/custom_config.h`: Contains the master `RUN_CUSTOM_LOOP` feature flag.
+- `libraries/AP_CustomConfig/AP_CustomConfig.h`: Contains the master `RUN_CUSTOM_LOOP` feature flag.
 - `ArduCopter/custom_main.cpp`: Contains the `newMain()` function, the entry point for all custom application logic.
 - `ArduCopter/mode.cpp`: Modified to include the hook that calls `newMain()` when the feature flag is enabled.
 - `micoair-h743.cfg`: The custom OpenOCD configuration file required to correctly flash the dual-bank memory of the MicoAir H743.

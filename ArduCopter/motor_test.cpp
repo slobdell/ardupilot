@@ -1,5 +1,5 @@
 #include "Copter.h"
-#include "custom_config.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 /*
   mavlink motor test - implements the MAV_CMD_DO_MOTOR_TEST mavlink command so that the GCS/pilot can test an individual motor or flaps
@@ -63,16 +63,16 @@ void Copter::motor_test_output()
 #if FRAME_CONFIG != HELI_FRAME
                 if (motor_test_throttle_value <= 100) {
                     bool reversible = false;
-                    if(motor_test_seq < 4 && LIFTING_MOTORS_REVERSIBLE) {
+                    if(motor_test_seq < 4 && g_config.lifting_motors_reversible) {
                         reversible = true;
-                    } else if (motor_test_seq >= 4 && LATERAL_MOTORS_CONFIG4) {
+                    } else if (motor_test_seq >= 4 && g_config.lateral_motors_config4) {
                         reversible = true;
                     }
 
                     if(reversible) {
                         float float_thrust = motor_test_throttle_value * 1e-2f; // * .01
-                        int16_t range_up = motors->get_pwm_output_max() - MOT_SPIN_NEUTRAL;
-                        pwm = (int16_t) MOT_SPIN_NEUTRAL + float_thrust * (float_thrust * range_up);
+                        int16_t range_up = motors->get_pwm_output_max() - g_config.mot_spin_neutral;
+                        pwm = (int16_t) g_config.mot_spin_neutral + float_thrust * (float_thrust * range_up);
                     } else {
                         int16_t pwm_min = motors->get_pwm_output_min();
                         int16_t pwm_max = motors->get_pwm_output_max();
@@ -156,12 +156,12 @@ MAV_RESULT Copter::mavlink_motor_test_start(const GCS_MAVLINK &gcs_chan, uint8_t
                                          float timeout_sec, uint8_t motor_count)
 {
     // SBL hard-coded this value.
-    if(FORCE_6DOF_ATTITUDE_CONTROLLER) {
+    if(g_config.force_6dof_attitude_controller) {
         motor_count = 12;
-        if(LATERAL_MOTORS_CONFIG4) {
+        if(g_config.lateral_motors_config4) {
             motor_count = 8;
         }
-        if (CATERPILLAR_H_FRAME_6DOF || ENABLE_TRICOPTER_VTOL_BACKEND) {
+        if (g_config.caterpillar_h_frame_6dof || ENABLE_TRICOPTER_VTOL_BACKEND) {
           // include motors as well as forward, lateral, and thrust.
           motor_count = 9;
         }

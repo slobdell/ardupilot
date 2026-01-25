@@ -44,7 +44,7 @@ void Copter::failsafe_radio_on_event()
     }
 
     // SBL always disarm motors entirely for our balloon aircraft
-    if(FAILSAFE_KILL_MOTORS) {
+    if(g_config.failsafe_kill_motors) {
         // should immediately disarm when we're on the ground
         announce_failsafe("Radio", "Disarming");
         arming.disarm(AP_Arming::Method::RADIOFAILSAFE);
