@@ -162,36 +162,20 @@ AP_Motors6DOF::~AP_Motors6DOF()
 }
 
 void AP_Motors6DOF::init(motor_frame_class frame_class, motor_frame_type frame_type)
-
 {
-
     if (_mixer != nullptr) {
-
         delete _mixer;
-
     }
-
     
-
     if (g_config.tricopter_is_blimp) {
-
         _mixer = new ::AP_Motors6DOF_Mixer::BlimpMixer();
-
     } else {
-
         _mixer = new ::AP_Motors6DOF_Mixer::AvatarMixer();
-
     }
-
-
 
     setup_motors(frame_class, frame_type);
-
     set_update_rate(_speed_hz);
-
 }
-
-
 
 bool AP_Motors6DOF::init(uint8_t expected_num_motors) {
     if (_mixer != nullptr) {
@@ -203,8 +187,6 @@ bool AP_Motors6DOF::init(uint8_t expected_num_motors) {
     } else {
         _mixer = new ::AP_Motors6DOF_Mixer::AvatarMixer();
     }
-
-    //gcs().send_text(MAV_SEVERITY_INFO,"SBL inside custom init func, expected motors %d", expected_num_motors);
 
     setup_motors(MOTOR_FRAME_UNDEFINED, MOTOR_FRAME_TYPE_PLUS);
 
@@ -229,7 +211,6 @@ bool AP_Motors6DOF::init(uint8_t expected_num_motors) {
 
 void AP_Motors6DOF::setup_motors(motor_frame_class frame_class, motor_frame_type frame_type)
 {
-    // remove existing motors to ensure a clean slate
     for (int8_t i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) {
         remove_motor(i);
     }
@@ -278,22 +259,29 @@ void AP_Motors6DOF::output_to_motors()
 {
     int8_t i;
     int16_t motor_out[AP_MOTORS_MAX_NUM_MOTORS];
+    bool is_shut_down = (_spool_state == SpoolState::SHUT_DOWN);
 
     for (i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) {
         if (motor_enabled[i]) {
             bool is_reversible = g_config.lifting_motors_reversible;
+            float thrust_val = _thrust_rpyt_out[i];
             #if ENABLE_TRICOPTER_VTOL_BACKEND
+            if (g_config.tricopter_is_blimp && i < 2) {
+                thrust_val = fabsf(thrust_val);
+            }
             if (g_config.tricopter_is_blimp && i == 2) is_reversible = true;
             #endif
-            motor_out[i] = calc_thrust_to_pwm(_thrust_rpyt_out[i], is_reversible);
+            motor_out[i] = calc_thrust_to_pwm(thrust_val, is_reversible);
         }
     }
 
     if (_mixer != nullptr) {
         #if ENABLE_TRICOPTER_VTOL_BACKEND
         if (g_config.tricopter_is_blimp) {
-            SRV_Channels::set_output_scaled(SRV_Channel::k_scripting2, _mixer_results.tilt_angle * 4500.0f);
-            SRV_Channels::set_output_scaled(SRV_Channel::k_scripting3, _mixer_results.rudder_out * 4500.0f);
+            float tilt = is_shut_down ? 0.0f : _mixer_results.tilt_angle;
+            float rudder = is_shut_down ? 0.0f : _mixer_results.rudder_out;
+            SRV_Channels::set_output_scaled(SRV_Channel::k_scripting2, tilt * 4500.0f);
+            SRV_Channels::set_output_scaled(SRV_Channel::k_scripting3, rudder * 4500.0f);
             SRV_Channels::set_output_scaled(SRV_Channel::k_scripting4, _mixer_results.elevator_out * 4500.0f);
         }
         #endif
@@ -311,21 +299,15 @@ float AP_Motors6DOF::get_current_limit_max_throttle()
 
 void AP_Motors6DOF::output_armed_stabilizing()
 {
-    uint32_t now = AP_HAL::millis();
-    if(now - lastLogTime6 > LOG_PERIOD) {
-        lastLogTime6 = now;
-        gcs().send_text(MAV_SEVERITY_INFO, "SBL forward_in was %.2f", _forward_in);
-    }
+    static uint32_t last_dbg_ms = 0;
+    uint32_t now_ms = AP_HAL::millis();
+    bool should_log = (now_ms - last_dbg_ms > 2000);
+    if (should_log) last_dbg_ms = now_ms;
 
     float roll_thrust = (_roll_in + _roll_in_ff);
     float pitch_thrust = (_pitch_in + _pitch_in_ff);
     float yaw_thrust = (_yaw_in + _yaw_in_ff);
-    float throttle_thrust;
-    if(g_config.lifting_motors_reversible || g_config.tricopter_is_blimp) {
-        throttle_thrust = get_throttle_bidirectional();
-    } else {
-        throttle_thrust = get_throttle();
-    }
+    float throttle_thrust = (g_config.lifting_motors_reversible || g_config.tricopter_is_blimp) ? get_throttle_bidirectional() : get_throttle();
     float forward_thrust = _forward_in;
     float lateral_thrust = _lateral_in;
 
@@ -347,11 +329,10 @@ void AP_Motors6DOF::output_armed_stabilizing()
     mixer_in.spool_state = _spool_state;
     mixer_in.is_armed = armed();
     mixer_in.tilt_rate_up_dps = 40.0f;
+
 #if ENABLE_TRICOPTER_VTOL_BACKEND
     QuadPlane *qp = QuadPlane::get_singleton();
-    if (qp != nullptr) {
-        mixer_in.tilt_rate_up_dps = (float)qp->tiltrotor.max_rate_up_dps;
-    }
+    if (qp != nullptr) mixer_in.tilt_rate_up_dps = (float)qp->tiltrotor.max_rate_up_dps;
 #endif
 
     const AP_AHRS &ahrs = AP::ahrs();
@@ -360,17 +341,26 @@ void AP_Motors6DOF::output_armed_stabilizing()
     mixer_in.ahrs_pitch_rad = ahrs.get_pitch();
     mixer_in.gyro = ahrs.get_gyro();
 
+    auto f2pwm = [](float v, float min, float max) -> uint16_t {
+        return 1000 + (uint16_t)((constrain_float(v, min, max) - min) / (max - min) * 1000);
+    };
+
     for (int k=0; k<16; k++) {
-        mixer_in.rc_in[k] = RC_Channels::rc_channel(k)->get_radio_in();
+        const RC_Channel *c = RC_Channels::rc_channel(k);
+        mixer_in.rc_in[k] = (c != nullptr) ? c->get_radio_in() : 1500;
     }
 
-    if (_mixer != nullptr) {
-        _mixer->mix(mixer_in, _mixer_state, _mixer_results);
-    }
+    mixer_in.manual_override_pwm = mixer_in.rc_in[7]; // Channel 8
+    mixer_in.transition_pwm = mixer_in.rc_in[10];     // Channel 11
 
-    for (int i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) {
-        _thrust_rpyt_out[i] = _mixer_results.motor_thrust[i];
-    }
+    mixer_in.rc_in[6] = f2pwm(throttle_thrust, -1.0f, 1.0f);
+    mixer_in.rc_in[7] = f2pwm(forward_thrust, -1.0f, 1.0f);
+    mixer_in.rc_in[8] = f2pwm(lateral_thrust, -1.0f, 1.0f);
+    mixer_in.rc_in[10] = f2pwm(_plane_inputs.transition_progress, 0.0f, 1.0f);
+
+    if (_mixer != nullptr) _mixer->mix(mixer_in, _mixer_state, _mixer_results);
+
+    for (int i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) _thrust_rpyt_out[i] = _mixer_results.motor_thrust[i];
     
     limit.roll = _mixer_results.limit.roll;
     limit.pitch = _mixer_results.limit.pitch;
@@ -392,14 +382,12 @@ void AP_Motors6DOF::output_armed_stabilizing()
     float _batt_current;
     if (_batt_current_max > 0.0f && battery.current_amps(_batt_current)) {
         float _batt_current_delta = _batt_current - _batt_current_last;
-        float _current_change_rate = _batt_current_delta / _dt;
-        float predicted_current = _batt_current + (_current_change_rate * _dt * 5);
+        float predicted_current = _batt_current + ((_batt_current_delta / _dt) * _dt * 5);
         float batt_current_ratio = _batt_current / _batt_current_max;
-        float predicted_current_ratio = predicted_current / _batt_current_max;
-        _batt_current_last = _batt_current;
         if (predicted_current > _batt_current_max * 1.5f) batt_current_ratio = 2.5f;
-        else if (_batt_current < _batt_current_max && predicted_current > _batt_current_max) batt_current_ratio = predicted_current_ratio;
+        else if (_batt_current < _batt_current_max && predicted_current > _batt_current_max) batt_current_ratio = predicted_current / _batt_current_max;
         _output_limited += (_dt / (_dt + _batt_current_time_constant)) * (1 - batt_current_ratio);
+        _batt_current_last = _batt_current;
     }
     #endif
 

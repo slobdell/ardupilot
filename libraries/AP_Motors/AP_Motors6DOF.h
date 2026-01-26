@@ -19,7 +19,8 @@ public:
 
     AP_Motors6DOF(uint16_t speed_hz = AP_MOTORS_SPEED_DEFAULT) :
         AP_MotorsMatrix(speed_hz),
-        _mixer(nullptr)
+        _mixer(nullptr),
+        _plane_inputs{}
         {
         AP_Param::setup_object_defaults(this, var_info);
     };

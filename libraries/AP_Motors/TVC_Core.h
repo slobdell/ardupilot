@@ -145,15 +145,15 @@ const float MANUAL_YAW_DEADBAND = 0.05f;
 // int float_to_sbus_pwm(float float_val, float min_float, float max_float); // Removed
 
 
-struct TVC_State {
+struct TVC_CoreState {
     LinearPIDController& pitch_rate_pid;
     LinearPIDController& roll_rate_pid;
     LinearPIDController& pitch_angle_pid;
     LinearPIDController& roll_angle_pid;
     CustomFilter& target_pitch_rate_filter;
     CustomFilter& target_roll_rate_filter;
-    bool pitch_saturated;
-    bool roll_saturated;
+    bool& pitch_saturated;
+    bool& roll_saturated;
 };
 
 
@@ -190,7 +190,7 @@ static inline float sbus_pwm_to_float(int pwm, float min_float, float max_float)
 }
 void newMain();
 
-TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const TVC_Config& config);
+TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_CoreState& state, const TVC_Config& config);
 static const int BAUD = 115200;
 static const int SERIAL_NUM = 4;
 static const uint32_t LOG_PERIOD = 2000; // milliseconds

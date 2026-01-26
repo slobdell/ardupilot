@@ -46,6 +46,8 @@ struct MixerInputs {
 
     // Raw RC Perception (for Overrides and Tuning)
     uint16_t rc_in[16];
+    uint16_t manual_override_pwm;
+    uint16_t transition_pwm;
 };
 
 // --- Mixer Output Actuation ---
@@ -65,12 +67,17 @@ struct MixerOutputs {
         bool throttle_lower;
         bool throttle_upper;
     } limit;
+
+    // Debugging data passed from mixer to backend
+    TVC_Debug_Data debug_data;
 };
 
 // --- Persistent State ---
 struct MixerState {
     float current_tilt_deg;
     bool manual_override_active;
+    bool pitch_saturated;
+    bool roll_saturated;
     
     // "Brain" (TVC) Persistent Objects
     LinearPIDController pitch_rate_pid;
@@ -83,16 +90,18 @@ struct MixerState {
     MixerState() :
         current_tilt_deg(0.0f),
         manual_override_active(false),
+        pitch_saturated(false),
+        roll_saturated(false),
         pitch_rate_pid(0,0,0,0),
         roll_rate_pid(0,0,0,0),
-        pitch_angle_pid(tvc_config.pitch_angle.p, tvc_config.pitch_angle.i, tvc_config.pitch_angle.d, tvc_config.i_max_angle),
-        roll_angle_pid(tvc_config.roll_angle.p, tvc_config.roll_angle.i, tvc_config.roll_angle.d, tvc_config.i_max_angle),
+        pitch_angle_pid(::tvc_config.pitch_angle.p, ::tvc_config.pitch_angle.i, ::tvc_config.pitch_angle.d, ::tvc_config.i_max_angle),
+        roll_angle_pid(::tvc_config.roll_angle.p, ::tvc_config.roll_angle.i, ::tvc_config.roll_angle.d, ::tvc_config.i_max_angle),
         target_pitch_rate_filter(20.0, 1.0/400.0, IIR::ORDER::OD2, IIR::TYPE::LOWPASS),
         target_roll_rate_filter(20.0, 1.0/400.0, IIR::ORDER::OD2, IIR::TYPE::LOWPASS)
     {}
 
-    // Helper to generate the TVC_State expected by tvc_run_main_logic
-    TVC_State get_tvc_state() {
+    // Helper to generate the TVC_CoreState expected by tvc_run_main_logic
+    TVC_CoreState get_tvc_state() {
         return {
             pitch_rate_pid,
             roll_rate_pid,
@@ -100,8 +109,8 @@ struct MixerState {
             roll_angle_pid,
             target_pitch_rate_filter,
             target_roll_rate_filter,
-            false,
-            false
+            this->pitch_saturated,
+            this->roll_saturated
         };
     }
 };

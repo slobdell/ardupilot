@@ -20,7 +20,7 @@
 // --- TVC Configuration Instance ---
 // This now defines two arbitrary points on the gain schedule spectrum.
 // The system will create a linear function based on these two points.
-const TVC_Config tvc_config = {
+extern const TVC_Config tvc_config = {
     .pitch_rate_tune_point_low  = {0.25f, 0.0036f, 0.0036f, 0.000011f}, // Tuned at low thrust (e.g., 25%)
     .pitch_rate_tune_point_high = {0.75f, 0.0018f, 0.0036f, 0.0000055f},// Tuned at high thrust (e.g., 75%)
     .roll_rate_tune_point_low   = {0.25f, 0.001f, 0.001f, 0.000005899f},
@@ -53,7 +53,7 @@ static inline float degrees(float rad) {
 // --- CORE LOGIC IMPLEMENTATION (No HAL Dependencies) ---
 // =============================================================================
 
-TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_State& state, const TVC_Config& config)
+TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_CoreState& state, const TVC_Config& config)
 {
     TVC_Outputs outputs;
     
