@@ -33,6 +33,7 @@ struct CustomConfig {
     bool emergency_blimp_manual_mode;
     float forward_flight_physical_angle_deg;
     float reverse_flight_physical_angle_deg;
+    float platform_max_angle_deg;
 };
 
 extern const CustomConfig blimpConfig;

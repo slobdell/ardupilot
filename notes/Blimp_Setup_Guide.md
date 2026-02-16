@@ -25,7 +25,7 @@ Ensure you have the ArduPilot build environment set up (waf, gcc-arm-none-eabi, 
 
 ### 2.2. Configuration
 **Step 1: Verify Feature Flags**
-Ensure `ArduCopter/custom_config.h` (or your board's header) contains the following **Critical Configuration**:
+Ensure `libraries/AP_CustomConfig/AP_CustomConfig.h` contains the following **Critical Configuration**:
 
 ```cpp
 // Backend Selection
@@ -62,6 +62,13 @@ Upload the resulting `arduplane.apj` to your flight controller.
 ## 3. Hardware & Wiring Guide
 
 The backend uses a specific hardcoded mixer. Wire your ESCs and Servos exactly as follows.
+
+### 3.0. Standard Serial Port Map (MatekH743)
+
+| Port | Protocol | Device | Baud | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| **SERIAL1** | **9** (Lidar) | **Rangefinder** | **115200** | Benewake TF02-Pro |
+| **SERIAL4** | **32** (MSP) | **Optical Flow** | **115200** | Matek 3901-L0X |
 
 ### 3.1. Mixer Map (MicoAir743 Specific)
 
@@ -251,6 +258,18 @@ Blimps have high inertia and low thrust authority. Default QuadPlane settings ar
 *   **Battery Failsafe:**
     *   `BATT_FS_LOW_ACT`: **2** (QLand).
 
+## 5.10. Platform Stabilization (New Feature)
+The firmware supports active stabilization for a 2-axis gimbal or payload platform, keeping it level relative to the horizon regardless of the blimp's pitch/roll.
+
+*   **Concept:** The system outputs an inverted attitude signal to counteract the airframe's movement.
+*   **Logic:** `Output = -Attitude`.
+*   **Scaling:** The default scaling is **±45° = ±100% servo travel**.
+    *   Example: If the blimp pitches up +45°, the servo is commanded to -100% (to tilt the platform down 45°).
+*   **Configuration:**
+    *   **Platform Roll Servo:** Set `SERVOn_FUNCTION` = **98** (Scripting 5).
+    *   **Platform Pitch Servo:** Set `SERVOn_FUNCTION` = **99** (Scripting 6).
+*   **Enablement:** This feature is enabled via the `optical_flow_stabilized_roll` and `optical_flow_stabilized_pitch` flags in `libraries/AP_CustomConfig/AP_CustomConfig.h`.
+
 ## 6. Pre-Flight Verification
 
 1.  **Servo Setup:**
@@ -282,14 +301,23 @@ Blimps have high inertia and low thrust authority. Default QuadPlane settings ar
 ### 7.1. Rangefinder
 *   **Model:** **Benewake TF02-Pro** (Lidar).
 *   **Range:** ~40m (Indoor/Outdoor).
-*   **Connection:** Serial (UART).
+*   **Connection:** Serial (UART1).
 *   **Parameters:**
-    *   `SERIALx_PROTOCOL`: **9** (Rangefinder).
-    *   `SERIALx_BAUD`: **115** (115200).
+    *   `SERIAL1_PROTOCOL`: **9** (Rangefinder).
+    *   `SERIAL1_BAUD`: **115** (115200).
     *   `RNGFND1_TYPE`: **27** (Benewake-TF03/TF02-Pro).
     *   `RNGFND1_MIN_CM`: **1**.
     *   `RNGFND1_MAX_CM`: **4000**.
     *   `RNGFND1_ORIENT`: **25** (Down).
+
+### 7.2. Optical Flow
+*   **Model:** **Matek 3901-L0X** (MSP).
+*   **Connection:** Serial (UART4).
+*   **Parameters:**
+    *   `SERIAL4_PROTOCOL`: **32** (MSP).
+    *   `SERIAL4_BAUD`: **115** (115200).
+    *   `FLOW_TYPE`: **6** (MSP).
+    *   `FLOW_ADDR`: **0**.
 
 ## 8. EKF3 Configuration (Indoor GPS + Optical Flow)
 

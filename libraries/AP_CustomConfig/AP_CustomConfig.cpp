@@ -21,7 +21,8 @@ const CustomConfig blimpConfig = {
     .tricopter_is_blimp = true,
     .emergency_blimp_manual_mode = true,
     .forward_flight_physical_angle_deg = 180.0f,
-    .reverse_flight_physical_angle_deg = -90.0f
+    .reverse_flight_physical_angle_deg = -90.0f,
+    .platform_max_angle_deg = 45.0f
 };
 
 const CustomConfig avatarConfig = {
@@ -45,7 +46,8 @@ const CustomConfig avatarConfig = {
     .tricopter_is_blimp = false,
     .emergency_blimp_manual_mode = false,
     .forward_flight_physical_angle_deg = 90.0f, // Standard VTOL tilt
-    .reverse_flight_physical_angle_deg = 0.0f
+    .reverse_flight_physical_angle_deg = 0.0f,
+    .platform_max_angle_deg = 90.0f
 };
 
 #if ACTIVE_CONFIG == CONFIG_TYPE_BLIMP

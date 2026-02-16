@@ -280,9 +280,27 @@ void AP_Motors6DOF::output_to_motors()
         if (g_config.tricopter_is_blimp) {
             float tilt = is_shut_down ? 0.0f : _mixer_results.tilt_angle;
             float rudder = is_shut_down ? 0.0f : _mixer_results.rudder_out;
-            SRV_Channels::set_output_scaled(SRV_Channel::k_scripting2, tilt * 4500.0f);
-            SRV_Channels::set_output_scaled(SRV_Channel::k_scripting3, rudder * 4500.0f);
-            SRV_Channels::set_output_scaled(SRV_Channel::k_scripting4, _mixer_results.elevator_out * 4500.0f);
+            SRV_Channels::set_output_norm(SRV_Channel::k_scripting2, tilt);
+            SRV_Channels::set_output_norm(SRV_Channel::k_scripting3, rudder);
+            SRV_Channels::set_output_norm(SRV_Channel::k_scripting4, _mixer_results.elevator_out);
+
+            // Platform Stabilization (Scripting 5 & 6)
+            // Concept: Output = -Attitude to keep platform level.
+            // Assumption: Servo Range 1.0 = platform_max_angle_deg degrees.
+            const AP_AHRS &ahrs = AP::ahrs();
+            const float max_angle = g_config.platform_max_angle_deg;
+            
+            if (g_config.optical_flow_stabilized_roll) {
+                float roll_deg = degrees(ahrs.get_roll());
+                float roll_comp = -constrain_float(roll_deg, -max_angle, max_angle) / max_angle;
+                SRV_Channels::set_output_norm(SRV_Channel::k_scripting5, roll_comp);
+            }
+
+            if (g_config.optical_flow_stabilized_pitch) {
+                float pitch_deg = degrees(ahrs.get_pitch());
+                float pitch_comp = -constrain_float(pitch_deg, -max_angle, max_angle) / max_angle;
+                SRV_Channels::set_output_norm(SRV_Channel::k_scripting6, pitch_comp);
+            }
         }
         #endif
     }
