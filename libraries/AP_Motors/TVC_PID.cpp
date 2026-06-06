@@ -1,4 +1,6 @@
 #include "TVC_PID.h"
+#include <cstddef>
+#include <cmath>
 
 
 LinearPIDController::LinearPIDController(double _p, double _i, double _d, double _iMax){

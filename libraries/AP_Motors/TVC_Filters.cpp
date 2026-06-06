@@ -17,8 +17,10 @@
  */
 
 #include "TVC_Filters.h"
+#ifndef TVC_STANDALONE_BUILD
 #include <AP_HAL/AP_HAL.h>
 #include <AP_SerialManager/AP_SerialManager.h>
+#endif
 
 using namespace IIR;
 
@@ -75,6 +77,7 @@ void CustomFilter::flush() {
 }
 
 void CustomFilter::dumpParams() {
+#ifndef TVC_STANDALONE_BUILD
   // Get a handle to the debug serial port
   AP_HAL::UARTDriver *debug_uart = AP::serialmanager().get_serial_by_id(4);
   if (debug_uart == nullptr) {
@@ -90,6 +93,7 @@ void CustomFilter::dumpParams() {
   debug_uart->printf("k3\t= %f\n", k3);
   debug_uart->printf("k4\t= %f\n", k4);
   debug_uart->printf("k5\t= %f\n", k5);
+#endif
 }
 
 // PRIVATE METHODS  * * * * * * * * * * * * * * * * * * * * 

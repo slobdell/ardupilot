@@ -25,7 +25,9 @@
 
 #pragma once
 
+#ifndef TVC_STANDALONE_BUILD
 #include <AP_HAL/AP_HAL.h>
+#endif
 #include "TVC_Filters_Defs.h"
 
 using namespace IIR;

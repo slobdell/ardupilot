@@ -18,6 +18,9 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <cmath>
+
 // Uncomment to use `double` instead of `float` for all library functions.
 //#define LIBFILTER_USE_DOUBLE
 
