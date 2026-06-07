@@ -1,0 +1,19 @@
+---
+layout: parameter
+name: Q_TAILSIT_VHPOW
+display_name: Tailsitter Vector Handling Power
+description: Scaling factor for the power of the attitude control vectors in tailsitter hover.
+default_value: 2.5
+range: 0 10
+units: 
+group: Q
+visual_asset_id: vtol_tailsitter_diagram
+investigation_status: complete
+source_code_urls:
+  - https://github.com/ArduPilot/ardupilot/blob/a37665a24621058938f5573dd0acb970002417ab/ArduPlane/quadplane.cpp#L100
+---
+
+# Tailsitter Vector Handling Power (Q_TAILSIT_VHPOW)
+
+## Description
+`Q_TAILSIT_VHPOW` sets the "Authority" of the VTOL motors over the fuselage orientation.

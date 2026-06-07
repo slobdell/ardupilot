@@ -6,6 +6,9 @@ Shows STATUSTEXT messages (ArduPilot's internal log output) and optionally
 any other MAVLink message types. Use this to verify initialization, check
 for errors, and observe ArduPilot's runtime state.
 
+Output is always written to logs/monitor_latest.log so it can be inspected
+after the fact without relying on terminal scroll.
+
 Usage:
     python3 monitor.py                        # STATUSTEXT only
     python3 monitor.py --types HEARTBEAT      # add specific types
@@ -16,10 +19,14 @@ Usage:
 import sys
 import time
 import argparse
+import os
 from pymavlink import mavutil
 
 sys.path.insert(0, '.')
 from connect import connect, request_message_interval
+
+LOG_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'logs')
+LOG_FILE = os.path.join(LOG_DIR, 'monitor_latest.log')
 
 SEVERITY = {
     0: 'EMERG',
@@ -68,22 +75,31 @@ def main():
     # Request STATUSTEXT at a high rate so we don't miss startup messages
     request_message_interval(mav, mavutil.mavlink.MAVLINK_MSG_ID_STATUSTEXT, 10)
 
-    print("\n--- Listening (Ctrl+C to stop) ---\n")
+    os.makedirs(LOG_DIR, exist_ok=True)
+    print(f"\n--- Listening (Ctrl+C to stop) --- logging to {LOG_FILE}\n")
     try:
-        while True:
-            msg = mav.recv_match(blocking=True, timeout=1.0)
-            if msg is None:
-                continue
-            t = msg.get_type()
-            if t == 'BAD_DATA':
-                continue
-            ts = time.strftime('%H:%M:%S')
-            if t == 'STATUSTEXT':
-                print(f"{ts}  {fmt_statustext(msg)}")
-            elif show_all or t in extra_types:
-                print(f"{ts}  [{t}] {msg.to_dict()}")
+        with open(LOG_FILE, 'w') as log:
+            while True:
+                msg = mav.recv_match(blocking=True, timeout=1.0)
+                if msg is None:
+                    continue
+                t = msg.get_type()
+                if t == 'BAD_DATA':
+                    continue
+                ts = time.strftime('%H:%M:%S')
+                if t == 'STATUSTEXT':
+                    line = f"{ts}  {fmt_statustext(msg)}"
+                    plain = f"{ts}  [{SEVERITY.get(msg.severity, '?'):6s}] {msg.text.rstrip(chr(0)).strip()}"
+                elif show_all or t in extra_types:
+                    line = f"{ts}  [{t}] {msg.to_dict()}"
+                    plain = line
+                else:
+                    continue
+                print(line)
+                log.write(plain + '\n')
+                log.flush()
     except KeyboardInterrupt:
-        print("\nDone.")
+        print(f"\nDone. Log saved to {LOG_FILE}")
 
 
 if __name__ == '__main__':

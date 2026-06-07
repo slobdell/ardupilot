@@ -140,6 +140,9 @@ public:
     void                set_pitch_ff(float pitch_in) { _pitch_in_ff = pitch_in; };  // range -1 ~ +1
     void                set_yaw(float yaw_in) { _yaw_in = yaw_in; };            // range -1 ~ +1
     void                set_yaw_ff(float yaw_in) { _yaw_in_ff = yaw_in; };      // range -1 ~ +1
+    void                set_pilot_roll(float roll_in) { _pilot_roll = roll_in; };    // normalized pilot stick, range -1 ~ +1
+    void                set_pilot_pitch(float pitch_in) { _pilot_pitch = pitch_in; }; // normalized pilot stick, range -1 ~ +1
+    void                set_pilot_yaw(float yaw_in) { _pilot_yaw = yaw_in; };     // normalized pilot stick, range -1 ~ +1
     void                set_throttle(float throttle_in) { _throttle_in = throttle_in; };   // range 0 ~ 1
     void                set_throttle_avg_max(float throttle_avg_max) { _throttle_avg_max = constrain_float(throttle_avg_max, 0.0f, 1.0f); };   // range 0 ~ 1
     void                set_throttle_filter_cutoff(float filt_hz) { _throttle_filter.set_cutoff_frequency(filt_hz); }
@@ -322,6 +325,9 @@ protected:
     float               _pitch_in_ff;               // desired pitch feed forward control from attitude controller, -1 ~ +1
     float               _yaw_in;                    // desired yaw control from attitude controller, -1 ~ +1
     float               _yaw_in_ff;                 // desired yaw feed forward control from attitude controller, -1 ~ +1
+    float               _pilot_roll;                // normalized pilot roll stick for surface authority, -1 ~ +1
+    float               _pilot_pitch;               // normalized pilot pitch stick for surface authority, -1 ~ +1
+    float               _pilot_yaw;                 // normalized pilot yaw stick for surface authority, -1 ~ +1
     float               _throttle_in;               // last throttle input from set_throttle caller
     float               _throttle_out;              // throttle after mixing is complete
     float               _throttle_slew_rate;        // throttle slew rate from input

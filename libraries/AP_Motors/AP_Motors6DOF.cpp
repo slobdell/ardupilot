@@ -281,30 +281,44 @@ void AP_Motors6DOF::output_to_motors()
             float tilt = is_shut_down ? 0.0f : _mixer_results.tilt_angle;
             SRV_Channels::set_output_norm(SRV_Channel::k_scripting2, tilt);
 
+            // All surface outputs use Scripting channels exclusively so that
+            // ArduPlane's own mixing pipeline (stabilize_roll/pitch, elevon mixer,
+            // vtail mixer) cannot overwrite our outputs. Named channels like
+            // k_aileron and k_vtail_left are written by ArduPlane in QSTABILIZE
+            // and would fight our mixer if we used them.
+
             if (!g_config.tricopter_is_blimp) {
-                // V-tail mixing: always active in both copter and plane modes.
-                // In copter mode: elevator_out=0, rudder_out=yaw → pure yaw authority.
-                // In plane mode: elevator_out and rudder_out set by split logic.
+                // Avatar: elevon surfaces carry combined elevator + aileron authority.
+                // V-tail surfaces carry combined elevator + rudder authority.
                 float elev = is_shut_down ? 0.0f : _mixer_results.elevator_out;
                 float rud  = is_shut_down ? 0.0f : _mixer_results.rudder_out;
-                SRV_Channels::set_output_norm(SRV_Channel::k_vtail_left,
+                float ail  = is_shut_down ? 0.0f : _mixer_results.aileron_out;
+                // Scripting3 = elevon left,  Scripting4 = elevon right
+                // elev dominates sign: same direction for pitch, opposite for roll.
+                SRV_Channels::set_output_norm(SRV_Channel::k_scripting3,
+                    constrain_float(elev + ail, -1.0f, 1.0f));
+                SRV_Channels::set_output_norm(SRV_Channel::k_scripting4,
+                    constrain_float(elev - ail, -1.0f, 1.0f));
+                // Scripting5 = vtail left,   Scripting6 = vtail right
+                SRV_Channels::set_output_norm(SRV_Channel::k_scripting5,
                     constrain_float(elev + rud, -1.0f, 1.0f));
-                SRV_Channels::set_output_norm(SRV_Channel::k_vtail_right,
+                SRV_Channels::set_output_norm(SRV_Channel::k_scripting6,
                     constrain_float(elev - rud, -1.0f, 1.0f));
-
-                // Aileron: only in copter mode (sin-scaled roll; plane mode uses aerodynamic surfaces)
-                bool in_copter_mode = (!is_shut_down && _plane_inputs.transition_progress <= 0.5f);
-                if (in_copter_mode) {
-                    SRV_Channels::set_output_norm(SRV_Channel::k_aileron, _mixer_results.aileron_out);
-                }
             }
 
             if (g_config.tricopter_is_blimp) {
+                // Blimp: separate rudder and elevator surfaces, plus left/right ailerons.
                 float rudder = is_shut_down ? 0.0f : _mixer_results.rudder_out;
+                float elev   = is_shut_down ? 0.0f : _mixer_results.elevator_out;
+                float ail    = is_shut_down ? 0.0f : _mixer_results.aileron_out;
+                // Scripting3 = rudder, Scripting4 = elevator
                 SRV_Channels::set_output_norm(SRV_Channel::k_scripting3, rudder);
-                SRV_Channels::set_output_norm(SRV_Channel::k_scripting4, _mixer_results.elevator_out);
+                SRV_Channels::set_output_norm(SRV_Channel::k_scripting4, elev);
+                // Scripting5 = aileron left, Scripting6 = aileron right
+                SRV_Channels::set_output_norm(SRV_Channel::k_scripting5,  ail);
+                SRV_Channels::set_output_norm(SRV_Channel::k_scripting6, -ail);
 
-                // Platform Stabilization (Scripting 5 & 6)
+                // Platform Stabilization overrides Scripting5/6 if enabled.
                 // Concept: Output = -Attitude to keep platform level.
                 // Assumption: Servo Range 1.0 = platform_max_angle_deg degrees.
                 const AP_AHRS &ahrs = AP::ahrs();
@@ -354,6 +368,9 @@ void AP_Motors6DOF::output_armed_stabilizing()
     mixer_in.roll = roll_thrust;
     mixer_in.pitch = pitch_thrust;
     mixer_in.yaw = yaw_thrust;
+    mixer_in.surface_roll  = _pilot_roll;
+    mixer_in.surface_yaw   = _pilot_yaw;
+    mixer_in.surface_pitch = _pilot_pitch;
     mixer_in.throttle = throttle_thrust;
     mixer_in.forward = forward_thrust;
     mixer_in.lateral = lateral_thrust;

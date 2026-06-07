@@ -19,7 +19,7 @@ set -e
 
 BOARD="MicoAir743"
 PORT="${MICOAIR_PORT:-/dev/ttyACM0}"
-APJ="build/${BOARD}/bin/arducopter.apj"
+APJ="build/${BOARD}/bin/arduplane.apj"
 GOLDEN_MASTER="golden_master_77a622c7453d515531c14ff3bb1e12686fae3741"
 
 BUILD=false
@@ -61,14 +61,14 @@ if ! $FLASH_ONLY; then
     echo "==> Configuring for ${BOARD} (--disable-scripting)..."
     ./waf configure --board "$BOARD" --disable-scripting
   fi
-  echo "==> Building arducopter..."
-  ./waf copter
+  echo "==> Building arduplane..."
+  ./waf plane
 fi
 
 # --- Verify firmware exists ---
 if [ ! -f "$APJ" ]; then
   echo "ERROR: $APJ not found."
-  echo "Run: ./waf configure --board $BOARD --disable-scripting && ./waf copter"
+  echo "Run: ./waf configure --board $BOARD --disable-scripting && ./waf plane"
   exit 1
 fi
 

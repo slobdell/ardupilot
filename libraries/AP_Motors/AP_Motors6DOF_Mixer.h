@@ -14,12 +14,19 @@ namespace AP_Motors6DOF_Mixer {
 // --- Perception Inputs ---
 struct MixerInputs {
     // Standard Copter Perception (Normalized -1.0 to 1.0)
+    // PID + FF combined — use for motor outputs (closed-loop stable).
     float roll;
     float pitch;
     float yaw;
     float throttle;     // 0.0 to 1.0 (or -1.0 to 1.0 if reversible)
     float forward;
     float lateral;
+
+    // Feedforward-only pilot stick inputs — use for aerodynamic surface outputs.
+    // These bypass the PID loop for direct, full-authority surface deflection.
+    float surface_roll;   // _roll_in_ff
+    float surface_yaw;    // _yaw_in_ff
+    float surface_pitch;  // _pitch_in_ff
 
     // Plane State Perception (for QuadPlane transitions)
     struct {

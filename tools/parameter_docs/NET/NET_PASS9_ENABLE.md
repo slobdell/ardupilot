@@ -1,0 +1,20 @@
+---
+alias_target: NET_PASS1_ENABLE
+default_value: 0
+description: Enable pullup after altitude wait
+display_name: Enable pullup after altitude wait
+group: NET
+investigation_status: alias
+layout: parameter
+name: NET_PASS9_ENABLE
+range: null
+source_code_urls:
+- https://github.com/ArduPilot/ardupilot/blob/a37665a24621058938f5573dd0acb970002417ab/ArduPlane/pullup.cpp#L16
+- https://github.com/ArduPilot/ardupilot/blob/a37665a24621058938f5573dd0acb970002417ab/ArduPlane/pullup.h#L39
+units: null
+visual_asset_id: null
+---
+
+# Enable pullup after altitude wait
+
+**Note:** This parameter functions identically to [NET_PASS1_ENABLE](../NET/NET_PASS1_ENABLE.html).

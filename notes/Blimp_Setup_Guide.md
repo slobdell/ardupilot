@@ -118,6 +118,8 @@ You must configure the `SERVO5` parameters to define the physical range of your 
 
 *The code interpolates from Trim->Max for forward commands, and Trim->Min for reverse commands. This ensures accurate vertical hover even if the mechanism is asymmetric.*
 
+*Because the blimp tilts both forward (positive) and backward (negative), TRIM must be set to the **physical midpoint** of the servo's total travel — i.e. the servo's mechanical center. If TRIM is off-center, the positive and negative tilt ranges will be unequal and hover will not be at true vertical.*
+
 ### 4.3. Yaw Control
 *   **Dual Actuation:** Yaw commands drive both the **Tail Motor (4)** and the **Rudder Servo (6)** simultaneously.
 *   **Reversible:** The tail motor spins in reverse for one direction and forward for the other.
@@ -170,6 +172,15 @@ Set these parameters in Mission Planner/QGC.
 *   `Q_FRAME_CLASS`: **1** (Quad)
 *   `Q_FRAME_TYPE`: **1** (X)
 
+### 5.1a. Weathervaning (QLOITER)
+The blimp is designed to hover nose-into-wind for efficient loiter. This is handled by ArduPlane's stock `AC_WeatherVane` library — no custom code required. It activates automatically in QLOITER when the pilot releases the yaw stick, and deactivates the moment the pilot applies yaw input.
+
+*   `WVANE_DIRECTION`: **1** (Nose into wind)
+*   `WVANE_GAIN`: **1.0** (Start here; increase for more aggressive response)
+*   `WVANE_ANG_MIN`: **1.0** (Deadzone in degrees; prevents hunting when nearly aligned)
+
+**Note (ArduCopter builds):** When testing with the copter binary, weathervaning in LOITER requires `custom_weathervane = true` in `libraries/AP_CustomConfig/AP_CustomConfig.cpp`. The stock WVANE parameters alone are not sufficient in the copter build — they only take effect through the custom `auto_yaw.get_heading()` path. See `ArduCopter/mode_loiter.cpp`.
+
 ### 5.2. Flight Modes
 This aircraft operates exclusively in VTOL (Quad) modes.
 *   **Mode Channel:** Set `FLTMODE_CH` = **6**.
@@ -178,13 +189,20 @@ This aircraft operates exclusively in VTOL (Quad) modes.
 *   **Mode 3:** `QHOVER` (Altitude Hold with manual vectoring)
 
 ### 5.3. Motor & Servo Functions (MicoAir743 Specific)
-*   **Physical Pins (Hardware Control):**
-    *   `SERVO1_FUNCTION`: **33** (Motor 1) -> Right Lift
-    *   `SERVO3_FUNCTION`: **34** (Motor 2) -> Left Lift
-    *   `SERVO4_FUNCTION`: **35** (Motor 3) -> Tail Yaw Motor
-    *   `SERVO5_FUNCTION`: **96** (Scripting 3) -> Rudder Servo
-    *   `SERVO6_FUNCTION`: **95** (Scripting 2) -> Tilt Servo
-    *   `SERVO7_FUNCTION`: **97** (Scripting 4) -> Elevator Servo (Optional)
+
+| Pin | Function | Param value | Mixer output |
+|-----|----------|-------------|--------------|
+| 1 | Motor 1 (Right Lift) | `SERVO1_FUNCTION = 33` | — |
+| 3 | Motor 2 (Left Lift) | `SERVO3_FUNCTION = 35` | — |
+| 4 | Motor 3 (Tail Yaw) | `SERVO4_FUNCTION = 34` | — |
+| 5 | Scripting2 — Tilt servo | `SERVO5_FUNCTION = 95` | `tilt_angle` |
+| 6 | Scripting3 — Rudder servo | `SERVO6_FUNCTION = 96` | `rudder_out` |
+| 7 | Scripting4 — Elevator servo | `SERVO7_FUNCTION = 97` | `elevator_out` |
+| 8 | Scripting5 — Aileron left | `SERVO8_FUNCTION = 98` | `aileron_out` |
+| 9 | Scripting6 — Aileron right | `SERVO9_FUNCTION = 99` | `-aileron_out` |
+
+**All surface outputs use Scripting channels.** ArduPlane's own mixing pipeline writes to named channels (`k_aileron`, `k_elevator`, `k_rudder`) in QSTABILIZE and would overwrite a custom mixer using those functions. Scripting channels are never touched by ArduPlane's mixer. See `libraries/AP_Motors/AP_Motors6DOF.cpp` for the routing logic.
+
 *   **Critical Plane Logic (Dummy Captures):**
     You **MUST** assign these functions to unused channels (e.g. 13, 14, 15) to enable the Plane mixer logic, even if nothing is physically connected.
     *   `SERVO13_FUNCTION`: **21** (Rudder)

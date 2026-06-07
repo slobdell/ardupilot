@@ -2,6 +2,14 @@
 #include "AP_Motors6DOF_AvatarMixer.h"
 #include <AP_HAL/AP_HAL.h>
 
+// Set to 1 to enable periodic debug logging via MAVLink text messages.
+// Logs once every 3 seconds. Disable before production flights.
+#define AVATAR_DEBUG_LOG 1
+
+#if AVATAR_DEBUG_LOG
+#include <GCS_MAVLink/GCS.h>
+#endif
+
 namespace AP_Motors6DOF_Mixer {
 
 #define AVATAR_MOT_WING_LEFT  0
@@ -9,6 +17,13 @@ namespace AP_Motors6DOF_Mixer {
 #define AVATAR_MOT_YAW        2
 
 const float AVATAR_MANUAL_YAW_DEADBAND = 0.05f;
+
+// Maximum forward/lateral input observed from the radio at full stick deflection.
+// ArduPlane's Q_ANGLE_MAX (currently 30 deg) caps the pitch demand fed into the
+// 6DOF attitude controller, so set_forward never reaches 1.0 even at full stick.
+// Dividing by this constant re-normalises full-stick to 1.0 so the TVC sees the
+// full -1..1 range. Adjust if Q_ANGLE_MAX or the radio calibration changes.
+const float AVATAR_FORWARD_INPUT_MAX = 0.42f;
 
 void AvatarMixer::setup_motors(::AP_Motors6DOF* backend)
 {
@@ -76,9 +91,13 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
 
         for (int k = 0; k < 16; k++) tvc_in.rc_in[k] = 1500;
         // inputs.throttle is 0..1 from get_throttle() (non-reversible motors)
-        tvc_in.rc_in[THRUST_CHANNEL]              = f2pwm(inputs.throttle, 0.0f, 1.0f);
-        tvc_in.rc_in[FORWARD_CHANNEL]             = f2pwm(inputs.forward * 2.0f, -1.0f, 1.0f);
-        tvc_in.rc_in[LATERAL_CHANNEL]             = f2pwm(inputs.lateral * 2.0f, -1.0f, 1.0f);
+        // TVC brain interprets THRUST_CHANNEL as -1..1 centered on 1500 (1500=idle, 2000=full).
+        // Avatar has no negative thrust, so map 0..1 → 1500..2000 (positive half only).
+        // Using the full 1000..2000 range would make stick-down look like full reverse thrust
+        // to the TVC (sqrtf magnitude), producing thr=1.0 at both extremes.
+        tvc_in.rc_in[THRUST_CHANNEL]              = 1500 + (int)(inputs.throttle * 500.0f);
+        tvc_in.rc_in[FORWARD_CHANNEL]             = f2pwm(inputs.forward  / AVATAR_FORWARD_INPUT_MAX, -1.0f, 1.0f);
+        tvc_in.rc_in[LATERAL_CHANNEL]             = f2pwm(inputs.lateral  / AVATAR_FORWARD_INPUT_MAX, -1.0f, 1.0f);
         tvc_in.rc_in[TRANSITION_PROGRESS_CHANNEL] = f2pwm(inputs.plane.transition_progress, 0.0f, 1.0f);
 
         TVC_CoreState tvc_s = state.get_tvc_state();
@@ -97,22 +116,55 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         float error_deg = fabsf(state.current_tilt_deg - target_deg);
         throttle_thrust *= constrain_float(cosf(radians(error_deg)), 0.0f, 1.0f);
 
-        // Roll scales with how vertical the motors are:
-        // cos(0°)=1 at hover (wings vertical), cos(90°)=0 in forward flight (wings horizontal)
-        float roll_effectiveness = cosf(radians(state.current_tilt_deg));
-        // Pre-scale roll to available headroom so clipping is always symmetric
-        float roll_headroom = fminf(1.0f - throttle_thrust, throttle_thrust);
+        // cos_tilt is floored at zero so that roll effectiveness and rear motor
+        // fade to zero at 90° and stay there if servo range extends past 90°.
+        float cos_tilt = fmaxf(0.0f, cosf(radians(state.current_tilt_deg)));
+
+        // Roll scales with how vertical the motors are; zero at 90° and beyond.
+        float roll_effectiveness = cos_tilt;
+        // Pitch is added directly to front motors without tilt scaling — the TVC brain adapts
+        // the tilt angle in response to attitude changes, so the two loops don't fight each other.
+        // Headroom is computed around the pitch-shifted base to keep roll clipping symmetric.
+        float base_thrust = throttle_thrust + inputs.pitch;
+        float roll_headroom = fminf(1.0f - base_thrust, base_thrust);
         float scaled_roll = constrain_float(inputs.roll * roll_effectiveness, -roll_headroom, roll_headroom);
-        outputs.motor_thrust[AVATAR_MOT_WING_LEFT]  = throttle_thrust + scaled_roll;
-        outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = throttle_thrust - scaled_roll;
-        // Rear motor: (throttle - pitch) scaled by cos(tilt); zero at forward flight, full at hover
-        float rear_thrust = (throttle_thrust - inputs.pitch) * cosf(radians(state.current_tilt_deg));
+        outputs.motor_thrust[AVATAR_MOT_WING_LEFT]  = base_thrust + scaled_roll;
+        outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = base_thrust - scaled_roll;
+        // Rear motor fades to zero at 90° and stays off beyond — it has no thrust
+        // vectoring so it loses relevance (and would invert without the floor) past 90°.
+        float rear_thrust = (inputs.throttle - inputs.pitch) * cos_tilt;
         outputs.motor_thrust[AVATAR_MOT_YAW] = constrain_float(rear_thrust, 0.0f, 1.0f);
-        outputs.rudder_out = inputs.yaw;
-        // Ailerons complement motor roll: sin(0°)=0 at hover, sin(90°)=1 in forward flight
-        outputs.aileron_out = inputs.roll * sinf(radians(state.current_tilt_deg));
-        // Elevator tracks tilt: cos(0°)=1 at hover, cos(90°)=0 in forward flight
-        outputs.elevator_out = cosf(radians(state.current_tilt_deg));
+        // Surfaces use FF-only pilot stick input for direct authority.
+        // Motors use PID-derived inputs.roll/yaw for closed-loop stability.
+        outputs.rudder_out   = inputs.surface_yaw;
+        outputs.aileron_out  = -inputs.surface_roll;
+        outputs.elevator_out = cos_tilt;
+
+#if AVATAR_DEBUG_LOG
+        {
+            static uint32_t last_log_ms = 0;
+            uint32_t now_ms = AP_HAL::millis();
+            if (now_ms - last_log_ms >= 3000) {
+                last_log_ms = now_ms;
+                gcs().send_text(MAV_SEVERITY_INFO,
+                    "AV fwd=%.2f thr=%.2f tilt=%.1f roll=%.2f yaw=%.2f ail=%.2f",
+                    (double)inputs.forward,
+                    (double)throttle_thrust,
+                    (double)state.current_tilt_deg,
+                    (double)inputs.roll,
+                    (double)inputs.yaw,
+                    (double)outputs.aileron_out);
+                gcs().send_text(MAV_SEVERITY_INFO,
+                    "AV elev=%.2f rud=%.2f vtL=%.2f vtR=%.2f evL=%.2f evR=%.2f",
+                    (double)outputs.elevator_out,
+                    (double)outputs.rudder_out,
+                    (double)(outputs.elevator_out + outputs.rudder_out),
+                    (double)(outputs.elevator_out - outputs.rudder_out),
+                    (double)(outputs.elevator_out + outputs.aileron_out),
+                    (double)(outputs.elevator_out - outputs.aileron_out));
+            }
+        }
+#endif
     }
 
     for (int i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) outputs.motor_thrust[i] = constrain_float(outputs.motor_thrust[i], -1.0f, 1.0f);

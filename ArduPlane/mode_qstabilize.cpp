@@ -1,5 +1,6 @@
 #include "mode.h"
 #include "Plane.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 #if HAL_QUADPLANE_ENABLED
 
@@ -19,6 +20,15 @@ void ModeQStabilize::update()
     // normalize control_input to [-1,1]
     const float roll_input = (float)plane.channel_roll->get_control_in() / plane.channel_roll->get_range();
     const float pitch_input = (float)plane.channel_pitch->get_control_in() / plane.channel_pitch->get_range();
+    const float yaw_input = (float)plane.channel_rudder->get_control_in() / plane.channel_rudder->get_range();
+
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    // pass normalized pilot stick directly to the 6DOF mixer for surface authority (ailerons, rudder).
+    // surfaces use pilot intent rather than rate PID FF, which is zero without a nonzero FF gain.
+    plane.quadplane.motors->set_pilot_roll(roll_input);
+    plane.quadplane.motors->set_pilot_pitch(pitch_input);
+    plane.quadplane.motors->set_pilot_yaw(yaw_input);
+#endif
 
     // then scale to target angles in centidegrees
     if (plane.quadplane.tailsitter.active()) {

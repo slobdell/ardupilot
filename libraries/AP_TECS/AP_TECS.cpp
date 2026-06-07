@@ -438,9 +438,7 @@ void AP_TECS::_update_speed(float DT)
     // limit the airspeed to a minimum of 3 m/s
     float min_airspeed = 3.0;
 #if ENABLE_TRICOPTER_VTOL_BACKEND
-    if (g_config.tricopter_is_blimp) {
-        min_airspeed = 0.0f;
-    }
+    min_airspeed = 0.0f;  // both blimp and avatar are zero-stall-speed VTOL vehicles
 #endif
 
     // Reset states of time since last update is too large
