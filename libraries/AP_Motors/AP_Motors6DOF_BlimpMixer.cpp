@@ -63,16 +63,18 @@ void BlimpMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs&
         // --- STATE B: PLANE MODE (Direct Actuator Mapping) ---
         // =====================================================================
         state.manual_override_active = false;
-        float pitch_in = inputs.plane.elevator_input / 4500.0f; 
-        float abs_pitch = fabsf(pitch_in);
-        float elev_cmd = (pitch_in > 0) ? 1.0f : -1.0f;
-        float tilt_cmd = (pitch_in > 0) ? -(abs_pitch * 2.0f) : abs_pitch;
+        float pitch_in = inputs.plane.elevator_input / 4500.0f;
+        float tilt_delta;
+        elevator_tilt_split(pitch_in, g_config.elevator_tilt_handoff_point,
+                            outputs.elevator_out, tilt_delta);
 
+        // Neutral forward position; tilt toward vertical on pitch-up, more forward on pitch-down
         float val_neutral = BLIMP_PLANE_FWD_ANGLE / g_config.forward_flight_physical_angle_deg;
-        outputs.tilt_angle = (tilt_cmd >= 0) ? (val_neutral + tilt_cmd * (1.0f - val_neutral)) 
-                                             : (val_neutral + tilt_cmd * (val_neutral - (-1.0f)));
-        
-        outputs.elevator_out = elev_cmd;
+        if (pitch_in >= 0.0f) {
+            outputs.tilt_angle = val_neutral - tilt_delta * (val_neutral + 1.0f);
+        } else {
+            outputs.tilt_angle = val_neutral + tilt_delta * (1.0f - val_neutral);
+        }
         float throttle_pct = inputs.plane.throttle_pct * 0.01f;
         outputs.motor_thrust[BLIMP_MOT_LIFT_RIGHT] = outputs.motor_thrust[BLIMP_MOT_LIFT_LEFT] = throttle_pct;
         outputs.motor_thrust[BLIMP_MOT_YAW] = outputs.rudder_out = inputs.plane.rudder_input / 4500.0f;
@@ -121,6 +123,7 @@ void BlimpMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs&
 
         outputs.motor_thrust[BLIMP_MOT_LIFT_RIGHT] = outputs.motor_thrust[BLIMP_MOT_LIFT_LEFT] = throttle_thrust;
         outputs.motor_thrust[BLIMP_MOT_YAW] = outputs.rudder_out = inputs.yaw;
+        outputs.elevator_out = cosf(radians(state.current_tilt_deg));
     }
 
     // Final Safety Clamp

@@ -280,11 +280,29 @@ void AP_Motors6DOF::output_to_motors()
         {
             float tilt = is_shut_down ? 0.0f : _mixer_results.tilt_angle;
             SRV_Channels::set_output_norm(SRV_Channel::k_scripting2, tilt);
-            SRV_Channels::set_output_norm(SRV_Channel::k_scripting4, _mixer_results.elevator_out);
+
+            if (!g_config.tricopter_is_blimp) {
+                // V-tail mixing: always active in both copter and plane modes.
+                // In copter mode: elevator_out=0, rudder_out=yaw → pure yaw authority.
+                // In plane mode: elevator_out and rudder_out set by split logic.
+                float elev = is_shut_down ? 0.0f : _mixer_results.elevator_out;
+                float rud  = is_shut_down ? 0.0f : _mixer_results.rudder_out;
+                SRV_Channels::set_output_norm(SRV_Channel::k_vtail_left,
+                    constrain_float(elev + rud, -1.0f, 1.0f));
+                SRV_Channels::set_output_norm(SRV_Channel::k_vtail_right,
+                    constrain_float(elev - rud, -1.0f, 1.0f));
+
+                // Aileron: only in copter mode (sin-scaled roll; plane mode uses aerodynamic surfaces)
+                bool in_copter_mode = (!is_shut_down && _plane_inputs.transition_progress <= 0.5f);
+                if (in_copter_mode) {
+                    SRV_Channels::set_output_norm(SRV_Channel::k_aileron, _mixer_results.aileron_out);
+                }
+            }
 
             if (g_config.tricopter_is_blimp) {
                 float rudder = is_shut_down ? 0.0f : _mixer_results.rudder_out;
                 SRV_Channels::set_output_norm(SRV_Channel::k_scripting3, rudder);
+                SRV_Channels::set_output_norm(SRV_Channel::k_scripting4, _mixer_results.elevator_out);
 
                 // Platform Stabilization (Scripting 5 & 6)
                 // Concept: Output = -Attitude to keep platform level.

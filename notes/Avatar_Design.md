@@ -110,7 +110,69 @@ The stall-prevention behavior is a natural consequence of the pitch compensation
 
 This is a continuous, proportional response. There is no threshold or mode switch. The wings tilt as much as the pitch deviation demands.
 
-### 4.4 Rear Motor Activation (Production Design, Not Required for T1 Ranger Test)
+### 4.4 Elevator-First Pitch Control in Plane Mode
+
+In plane mode, pitch authority is split between the elevator (V-tail) and motor tilt. The split is controlled by `g_config.elevator_tilt_handoff_point` (default `0.5`, set in `avatarConfig`).
+
+Given a normalized pitch demand `pitch_in` (0→1):
+
+| Demand range | Elevator | Motor tilt |
+|---|---|---|
+| 0 → `threshold` | Proportional 0→full | Stays at wings-horizontal (1.0) |
+| `threshold` → 1.0 | Saturated at full | Tilts wings toward vertical (1.0→0.0) |
+
+**Why:** At cruise speeds the elevator has aerodynamic authority and handles pitch alone. As the aircraft slows and elevator saturates, motor tilt provides the additional pitch-up moment needed to prevent stall — the same continuous, automatic response as the TVC pitch compensation in copter mode.
+
+**PID implication:** The elevator covers its full deflection range in only `threshold` fraction of the pitch demand range (effective gain = `1 / threshold` = 2× at default 0.5). ArduPlane's pitch PID gains must be reduced to prevent oscillation in the elevator-only zone.
+
+**V-tail mixing:** Avatar owns all V-tail servo outputs. Mixing is computed in `AP_Motors6DOF::output_to_motors()`: `vtail_left = elevator_out + rudder_out`, `vtail_right = elevator_out - rudder_out`. This runs in both copter and plane modes — in copter mode `elevator_out = 0`, so the V-tail provides yaw authority only.
+
+### 4.5 Copter Mode Elevator Behavior
+
+In copter mode the elevator (V-tail pitch surface) tracks the wing tilt angle via `cos(tilt_deg)`:
+
+- Wings vertical (hover, 0°): `cos(0°) = 1.0` → elevator full up
+- Wings horizontal (forward, 90°): `cos(90°) = 0.0` → elevator neutral
+
+This is the same geometric factor as motor roll authority, giving the system a unified basis: `cos(tilt)` governs both motor roll and elevator; `sin(tilt)` governs ailerons. At zero airspeed the elevator deflection is aerodynamically inert but becomes useful as airspeed develops during transition.
+
+### 4.6 Roll Thrust Headroom
+
+Differential roll thrust is pre-scaled to the available motor headroom before being applied, preventing asymmetric clipping:
+
+```cpp
+float roll_headroom = fminf(1.0f - throttle_thrust, throttle_thrust);
+float scaled_roll = constrain_float(inputs.roll * roll_effectiveness, -roll_headroom, roll_headroom);
+```
+
+At full throttle: headroom = 0 → roll authority gracefully zeroed, thrust preserved.
+At hover (0.5): headroom = 0.5 → full roll available.
+
+Without this, naive clipping would produce asymmetric motor outputs causing simultaneous thrust loss and unintended yaw.
+
+### 4.7 Rear Motor Mixing
+
+The rear motor acts as a tricopter-style tail motor — mixing throttle and pitch — scaled by the wing tilt position so it contributes nothing when wings are horizontal and full contribution at hover.
+
+**Copter mode:**
+```cpp
+rear = (throttle_thrust - inputs.pitch) * cosf(radians(state.current_tilt_deg))
+```
+- `inputs.pitch > 0` (nose up): rear motor decreases → tail drops → nose up ✓
+- `cos(0°) = 1` at hover: full authority
+- `cos(90°) = 0` in forward flight: rear motor off
+
+**Plane mode:**
+```cpp
+rear = (throttle_pct - pitch_in) * tilt_delta
+```
+- Zero when wings are horizontal (`tilt_delta = 0`)
+- Scales up only as stall-prevention tilt engages
+- Same sign convention: pitch-up demand reduces rear motor thrust
+
+Output is clamped to `[0, 1]` — rear motor is non-reversible.
+
+### 4.8 Rear Motor Activation (Production Design)
 
 The rear motor has two components:
 
@@ -161,10 +223,21 @@ This switches `g_config` to `avatarConfig`, selects `AvatarMixer` in `AP_Motors6
 - `AP_Motors6DOF` backend — mixer dispatch, output routing, spool state handling
 - `MixerInputs` / `MixerOutputs` / `MixerState` data contracts
 
-### 6.2 Needs Implementation
-- **`AvatarMixer::setup_motors()`** — currently a 3-motor blimp placeholder. Needs: left wing motor (throttle only), right wing motor (throttle only), optional rear motor (yaw factor, zero throttle).
-- **`AvatarMixer::mix()`** — currently zeros all outputs. Needs to implement the same copter/plane/manual-override state machine as `BlimpMixer::mix()`, with Avatar-specific motor mapping (same wing thrust, `sin(wing_angle)` rear motor).
-- **Motor count fix** — `init()` expects 5 motors for Avatar, but only 3 are registered. Fix: update `wantMotors` for Avatar to 3 (or 2 if rear motor is optional at build time).
+### 6.2 Implemented
+
+**`AvatarMixer::setup_motors()`** — 3 motors: left wing (throttle only), right wing (throttle only), rear yaw motor.
+
+**`AvatarMixer::mix()` — Copter mode:**
+- TVC brain (`tvc_run_main_logic`) — same as blimp, full pitch compensation and stall prevention
+- Both wing motors get equal throttle from TVC output
+- Differential roll: `cos(tilt_deg)` scales motor differential; `sin(tilt_deg)` scales ailerons — smooth handoff across the tilt range
+- Rear yaw motor gets `inputs.yaw`
+
+**`AvatarMixer::mix()` — Plane mode:**
+- Elevator-first, then motor tilt when saturated (see section 4.4)
+- V-tail mixing computed in mixer output stage
+
+**Motor count fix** — `wantMotors` is 3 for both blimp and Avatar. The original `? 3 : 5` was incorrect.
 
 ### 6.3 Not Required for T1 Ranger Test
 - Rear motor `sin(wing_angle)` formula — rear motor absent on test airframe
@@ -174,7 +247,22 @@ This switches `g_config` to `avatarConfig`, selects `AvatarMixer` in `AP_Motors6
 
 ## 7. Test Plan (T1 Ranger)
 
-### 7.1 ArduPilot Configuration
+### 7.1 Servo Output Assignments (T1 Ranger — 8 outputs)
+
+| # | Physical connection | ArduPilot function | Parameter value |
+|---|--------------------|--------------------|-----------------|
+| 1 | Left wing motor ESC | Motor 1 | `SERVO1_FUNCTION = 33` |
+| 2 | Right wing motor ESC | Motor 2 | `SERVO2_FUNCTION = 34` |
+| 3 | Rear tail motor ESC | Motor 3 | `SERVO3_FUNCTION = 35` |
+| 4 | Wing tilt servo | k_scripting2 | `SERVOx_FUNCTION = 95` |
+| 5 | Left aileron servo | k_aileron | `SERVOx_FUNCTION = 4` |
+| 6 | Right aileron servo | k_aileron (reversed) | `SERVOx_FUNCTION = 4`, `SERVOx_REVERSED = 1` |
+| 7 | Left V-tail servo | k_vtail_left | `SERVOx_FUNCTION = 79` |
+| 8 | Right V-tail servo | k_vtail_right | `SERVOx_FUNCTION = 80` |
+
+V-tail mixing is computed entirely by our motor mixer — do **not** configure any servo as `k_elevator` or `k_rudder`. Those functions are not used.
+
+### 7.2 ArduPilot Configuration
 Configure the T1 Ranger as a **QuadPlane**. This is primarily to access copter (Q) modes for testing the mixer logic. The production intent is that plane mode works at all times, but copter mode provides a controlled environment to validate motor mixing before full-plane testing.
 
 ### 7.2 Base Test Case: Copter Mode Forward Flight

@@ -115,14 +115,18 @@ We must distinguish between the *Aircraft Attitude* and the *Control Effort*.
         *   **0 to Split% Effort:** Drives Elevator.
         *   **Split% to 100% Effort:** Drives Vectoring.
 
-### B. Servo Function Mapping (Non-Intrusive Integration)
-To keep the adaptation clean, we will **not** assign the standard `Elevator` function to any physical pin. Instead, we will use `Scripting` functions to drive the hardware.
+### B. Implementation (Motor Mixer — as built)
 
-*   **Logical Input:** The code reads the internal `k_elevator` channel (driven by the PID).
-*   **Physical Outputs:**
-    *   **Real Elevator Servo:** Assign parameter `SERVOn_FUNCTION` to `94` (**Scripting1**).
-    *   **Tilt Mechanism Servo:** Assign parameter `SERVOn_FUNCTION` to `95` (**Scripting2**).
-*   **The Code:** Our modified `Plane::set_servos()` will write the mixed results to `k_scripting1` and `k_scripting2`.
+The split-range logic is implemented directly in `AP_Motors6DOF_BlimpMixer::mix()` (plane mode branch), **not** in `ArduPlane/servos.cpp` as originally planned. This is cleaner — the mixer owns all actuator outputs.
+
+**Key details:**
+- `inputs.plane.elevator_input` (range ±4500) is the pitch demand from ArduPlane's attitude controller
+- The threshold is `g_config.elevator_tilt_handoff_point` (default `0.5f`), set in `blimpConfig` in `AP_CustomConfig.cpp`
+- The shared helper `elevator_tilt_split()` in `AP_Motors6DOF_Mixer.h` performs the split computation
+- Elevator output → `k_scripting4` (written in `AP_Motors6DOF::output_to_motors()`)
+- Tilt servo → `k_scripting2` (written in `AP_Motors6DOF::output_to_motors()`)
+
+**PID tuning implication:** Because the elevator travels its full range in only the first `elevator_tilt_handoff_point` fraction of pitch demand, the effective elevator gain is `1 / elevator_tilt_handoff_point` (2× at the default 0.5). ArduPlane's pitch PID gains should be reduced accordingly to avoid oscillation in the elevator-only zone.
 
 ### C. The Signal Mixer Logic (`ArduPlane/servos.cpp`)
 We intercept the calculated pitch demand and apply the split-range logic with explicit software constraints.

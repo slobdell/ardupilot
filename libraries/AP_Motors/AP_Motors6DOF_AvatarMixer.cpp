@@ -27,6 +27,7 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
     outputs.tilt_angle = 0.0f;
     outputs.rudder_out = 0.0f;
     outputs.elevator_out = 0.0f;
+    outputs.aileron_out = 0.0f;
 
     bool in_plane_mode = (inputs.plane.transition_progress > 0.5f);
 
@@ -36,13 +37,18 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // Wings horizontal for forward flight; elevator handles pitch.
         // =====================================================================
         state.manual_override_active = false;
-        outputs.tilt_angle = 1.0f;  // Wings horizontal
         float pitch_in = inputs.plane.elevator_input / 4500.0f;
-        outputs.elevator_out = pitch_in;
+        float tilt_delta;
+        elevator_tilt_split(pitch_in, g_config.elevator_tilt_handoff_point,
+                            outputs.elevator_out, tilt_delta);
+
+        // Wings horizontal until elevator saturates, then tilt toward vertical on pitch-up only
+        outputs.tilt_angle = 1.0f - ((pitch_in >= 0.0f) ? tilt_delta : 0.0f);
         float throttle_pct = inputs.plane.throttle_pct * 0.01f;
         outputs.motor_thrust[AVATAR_MOT_WING_LEFT] = outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = throttle_pct;
         outputs.rudder_out = inputs.plane.rudder_input / 4500.0f;
-        outputs.motor_thrust[AVATAR_MOT_YAW] = outputs.rudder_out;
+        // Rear motor: (throttle - pitch) scaled by tilt engagement; scales to 0 when wings horizontal
+        outputs.motor_thrust[AVATAR_MOT_YAW] = constrain_float((throttle_pct - pitch_in) * tilt_delta, 0.0f, 1.0f);
 
     } else {
         // =====================================================================
@@ -94,10 +100,19 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // Roll scales with how vertical the motors are:
         // cos(0°)=1 at hover (wings vertical), cos(90°)=0 in forward flight (wings horizontal)
         float roll_effectiveness = cosf(radians(state.current_tilt_deg));
-        outputs.motor_thrust[AVATAR_MOT_WING_LEFT]  = throttle_thrust + inputs.roll * roll_effectiveness;
-        outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = throttle_thrust - inputs.roll * roll_effectiveness;
-        // Rear yaw motor (absent on T1 Ranger; no-op when motor channel not wired)
-        outputs.motor_thrust[AVATAR_MOT_YAW] = outputs.rudder_out = inputs.yaw;
+        // Pre-scale roll to available headroom so clipping is always symmetric
+        float roll_headroom = fminf(1.0f - throttle_thrust, throttle_thrust);
+        float scaled_roll = constrain_float(inputs.roll * roll_effectiveness, -roll_headroom, roll_headroom);
+        outputs.motor_thrust[AVATAR_MOT_WING_LEFT]  = throttle_thrust + scaled_roll;
+        outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = throttle_thrust - scaled_roll;
+        // Rear motor: (throttle - pitch) scaled by cos(tilt); zero at forward flight, full at hover
+        float rear_thrust = (throttle_thrust - inputs.pitch) * cosf(radians(state.current_tilt_deg));
+        outputs.motor_thrust[AVATAR_MOT_YAW] = constrain_float(rear_thrust, 0.0f, 1.0f);
+        outputs.rudder_out = inputs.yaw;
+        // Ailerons complement motor roll: sin(0°)=0 at hover, sin(90°)=1 in forward flight
+        outputs.aileron_out = inputs.roll * sinf(radians(state.current_tilt_deg));
+        // Elevator tracks tilt: cos(0°)=1 at hover, cos(90°)=0 in forward flight
+        outputs.elevator_out = cosf(radians(state.current_tilt_deg));
     }
 
     for (int i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) outputs.motor_thrust[i] = constrain_float(outputs.motor_thrust[i], -1.0f, 1.0f);

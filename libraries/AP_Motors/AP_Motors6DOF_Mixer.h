@@ -58,6 +58,7 @@ struct MixerOutputs {
     float tilt_angle;
     float rudder_out;
     float elevator_out;
+    float aileron_out;
 
     // Navigation Limits (Saturation feedback)
     struct {
@@ -114,6 +115,23 @@ struct MixerState {
         };
     }
 };
+
+// Splits a normalized pitch demand [-1,1] into elevator and tilt contributions.
+// Below threshold: elevator fills proportionally, tilt_delta = 0.
+// Above threshold: elevator saturates at ±1, tilt_delta ramps 0→1.
+static inline void elevator_tilt_split(float pitch_in, float threshold,
+                                       float& elevator_out, float& tilt_delta)
+{
+    float abs_pitch = fabsf(pitch_in);
+    float sign = (pitch_in >= 0.0f) ? 1.0f : -1.0f;
+    if (abs_pitch <= threshold) {
+        elevator_out = sign * (abs_pitch / threshold);
+        tilt_delta = 0.0f;
+    } else {
+        elevator_out = sign;
+        tilt_delta = (abs_pitch - threshold) / (1.0f - threshold);
+    }
+}
 
 // --- The Mixer Interface ---
 class Interface {
