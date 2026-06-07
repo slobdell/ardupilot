@@ -8,7 +8,7 @@
 #define CONFIG_TYPE_AVATAR 1
 
 // --- ACTIVE CONFIGURATION SELECTOR ---
-#define ACTIVE_CONFIG CONFIG_TYPE_BLIMP
+#define ACTIVE_CONFIG CONFIG_TYPE_AVATAR
 // -------------------------------------
 
 struct CustomConfig {

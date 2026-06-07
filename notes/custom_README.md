@@ -54,16 +54,18 @@ The firmware is built using the `waf` build system. To create a debug-enabled bu
 # Clean any previous build artifacts
 ./waf distclean
 
-# Configure the build for the target board
-# Do NOT use --disable-scripting: AC_AttitudeControl_Multi_6DoF (used by our
-# force_6dof_attitude_controller path) is only compiled when scripting is enabled.
-# Disabling scripting produces a linker error.
-./waf configure --board MicoAir743 --debug   # debug build, for GDB
-./waf configure --board MicoAir743           # release build, for flying
+# Configure the build for the target board.
+# --disable-scripting is required: the Lua scripting runtime is too large for
+# the H743's 2 MB flash. The scripting guard was removed from
+# AC_AttitudeControl_Multi_6DoF.cpp so it compiles correctly without scripting.
+./waf configure --board <BOARD_NAME> --disable-scripting --debug  # debug build, for GDB
+./waf configure --board <BOARD_NAME> --disable-scripting          # release build, for flying
 
 # Compile the ArduCopter firmware
 ./waf copter
 ```
+
+See the board-specific guide in `notes/` for the correct `<BOARD_NAME>` and flash paths.
 
 ### 4.2. Flashing the Firmware
 

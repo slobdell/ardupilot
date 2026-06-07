@@ -27,7 +27,13 @@ The design goal is that this transition happens **automatically and continuously
 In the full production design, the two rear motors are mounted on spring-controlled levers. Increasing yaw thrust on one side causes that motor to swing outward and deliver side thrust, providing yaw authority at low speeds and in copter mode. This mechanism is **not present on the T1 Ranger test airframe**; yaw is uncontrolled during testing and accepted as a limitation.
 
 ### 2.4 Roll Control
-No roll control exists in copter mode. Both wing motors always receive identical thrust commands. This is the same design decision as the blimp (which also has no roll authority in hover) and is accepted as a limitation for this airframe.
+Roll is achieved via differential thrust between the two wing motors. Effectiveness scales with `cos(wing_tilt_angle)`:
+
+- **Wings vertical (hover, 0°):** `cos(0°) = 1.0` — full roll authority
+- **Wings horizontal (forward flight, 90°):** `cos(90°) = 0.0` — no roll authority
+- **Intermediate angles:** proportional authority (e.g., 45° → 0.7)
+
+This is physically motivated: motors pointing upward produce roll when thrust is differential; motors pointing forward produce yaw instead. The yaw side effect from prop torque imbalance is accepted as a known limitation. Roll authority smoothly fades to zero as the aircraft transitions to forward flight, at which point aerodynamic surfaces take over.
 
 ---
 
@@ -43,7 +49,7 @@ The Avatar and the Blimp share the same fundamental control philosophy and the s
 | Elevator saturation response | Gondola tilts upward | Wings tilt upward |
 | Emergency downward thrust | Yes (fly-away recovery) | No |
 | Yaw motor | 1 tail motor | 1 rear motor (optional) |
-| Roll control | None | None |
+| Roll control | None | Differential thrust, scaled by `cos(tilt_angle)` |
 | TVC core | `tvc_run_main_logic` | `tvc_run_main_logic` (reused) |
 
 The key difference is geometry: the blimp's tilt range spans past vertical (up to 180° for downward emergency thrust), while the Avatar's range is 0° (wings vertical = hover) to 90° (wings horizontal = forward flight). This is reflected in `avatarConfig`:
@@ -163,7 +169,6 @@ This switches `g_config` to `avatarConfig`, selects `AvatarMixer` in `AP_Motors6
 ### 6.3 Not Required for T1 Ranger Test
 - Rear motor `sin(wing_angle)` formula — rear motor absent on test airframe
 - Spring-lever yaw mechanism — not present on T1 Ranger
-- Roll control — explicitly accepted as out of scope
 
 ---
 

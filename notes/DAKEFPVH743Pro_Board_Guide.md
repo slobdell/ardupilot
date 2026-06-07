@@ -95,12 +95,40 @@ firmware.ardupilot.org) and use QGC/Mission Planner for parameter configuration.
 
 ---
 
-## 5. Building the Firmware
+## 5. One-Time System Setup (Linux)
+
+Before flashing for the first time, install tools and configure USB permissions.
+
+### 5.1 Install dependencies
+
+```bash
+sudo apt-get install -y dfu-util binutils   # binutils provides objcopy
+```
+
+If apt reports unmet dependencies, run `sudo apt --fix-broken install` first.
+
+### 5.2 udev rules (flash without sudo)
+
+```bash
+sudo tee /etc/udev/rules.d/50-ardupilot.rules > /dev/null << 'EOF'
+# STM32 ROM DFU mode (dfu-util first-time flash)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="df11", MODE="0664", GROUP="plugdev"
+# DAKEFPV H743 Pro running ArduPilot firmware or bootloader (VID 1209:5741)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="5741", MODE="0664", GROUP="plugdev"
+EOF
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+Your user must be in the `plugdev` group (check with `groups`). After adding the
+rules, replug the board for them to take effect.
+
+---
+
+## 6. Building the Firmware
 
 **Note on scripting:** Do **not** use `--disable-scripting`. The 6DoF attitude
-controller (`AC_AttitudeControl_Multi_6DoF`) that our firmware instantiates via
-`force_6dof_attitude_controller = true` is compiled only when scripting is enabled.
-Disabling scripting will produce a linker error.
+controller (`AC_AttitudeControl_Multi_6DoF`) requires scripting to be enabled at
+compile time. Disabling it produces a linker error.
 
 **Note on `--debug`:** Adds debug symbols for GDB. Release builds are smaller and
 are what you flash for actual flights.
@@ -119,64 +147,92 @@ are what you flash for actual flights.
 ```
 
 Build outputs (path reflects whichever configure was run last):
-- **`arducopter_with_bl.hex`** — full flash image including bootloader; use for first flash or ST-Link
-- **`arducopter.apj`** — firmware only (no bootloader); use for OTA updates via GCS
-- **`arducopter`** — ELF with debug symbols; use with GDB (debug builds only)
+- **`arducopter_with_bl.hex`** — Intel HEX including bootloader; used as source for DFU
+- **`arducopter.apj`** — firmware only (no bootloader); used for OTA updates
+- **`arducopter`** — ELF with debug symbols; used with GDB (debug builds only)
 
 ---
 
-## 6. Flashing Methods
+## 7. Flashing — the `dake_flash.sh` Script
 
-### Method A: DFU (First-Time / Bootloader Flash)
-
-Use this when the board has no ArduPilot bootloader, or to recover a bricked board.
-
-1. Unplug the board from USB.
-2. Hold the **BOOT button** on the board.
-3. While holding BOOT, plug in USB — the board enters DFU mode.
-4. Verify it appears as a DFU device:
-   ```bash
-   lsusb | grep DFU
-   # or
-   dfu-util -l
-   ```
-5. Flash the full firmware including bootloader:
-   ```bash
-   dfu-util -a 0 --dfuse-address 0x08000000 -D build/DAKEFPVH743Pro/bin/arducopter_with_bl.hex
-   ```
-6. Unplug and replug — board boots into ArduPilot.
-
-### Method B: ST-Link / SWD (Developer Workflow)
-
-For rapid build-flash-debug cycles. Requires an ST-Link v2 and the SWD pads on
-the board. The `micoair-h743.cfg` OpenOCD config works for all STM32H7x boards.
+**Use `dake_flash.sh` for all flashing.** It handles build detection, DFU mode
+detection, hex-to-binary conversion, and the correct tool for each path.
 
 ```bash
-# Flash (from repo root)
+./dake_flash.sh           # incremental build then flash
+./dake_flash.sh --build   # reconfigure + build then flash
+./dake_flash.sh --flash   # flash last build without rebuilding
+./dake_flash.sh --dfu     # force DFU flash (board already in DFU mode)
+```
+
+### Flashing paths
+
+#### Path A: First-time flash (no ArduPilot bootloader installed)
+
+The board ships with STM32 ROM DFU, not an ArduPilot bootloader. This path burns
+the bootloader + firmware in one shot. After this, use Path B for all future
+flashes.
+
+Two ways to enter DFU mode:
+
+- **Hardware:** Unplug board, hold BOOT button, plug USB back in
+- **Software:** Run `./dake_flash.sh --flash` with ArduPilot running — `uploader.py`
+  sends a MAVLink reboot-to-bootloader command. Even though the serial flash will
+  fail (no ArduPilot bootloader), the board lands in DFU mode. Then run
+  `./dake_flash.sh --dfu` to complete the flash.
+
+Verify which mode the board is in:
+```bash
+lsusb | grep "0483:df11"   # ROM DFU mode (ready for dfu-util)
+lsusb | grep "1209:5741"   # ArduPilot firmware/bootloader running
+ls /dev/ttyACM*            # serial port present when ArduPilot is running
+```
+
+The script automatically converts `arducopter_with_bl.hex` to a raw binary via
+`objcopy` before calling `dfu-util`. Passing the `.hex` file directly to
+`dfu-util` does not work — it treats it as raw bytes rather than parsing Intel
+HEX format.
+
+```bash
+./dake_flash.sh --dfu
+# or manually:
+sudo dfu-util -a 0 --dfuse-address 0x08000000:leave -D /tmp/ardupilot_dfu.bin
+```
+
+After flashing, the board boots automatically (`:leave` flag) into ArduPilot.
+
+#### Path B: Normal OTA flash (ArduPilot bootloader installed)
+
+Once Path A has been done once, all future flashes go through the ArduPilot
+serial bootloader via USB — no BOOT button, no DFU mode needed.
+
+```bash
+./dake_flash.sh   # board must be running ArduPilot on /dev/ttyACM0
+```
+
+`uploader.py` sends a MAVLink reboot-to-bootloader command, the board reboots
+into its ArduPilot bootloader (not ROM DFU), and the `.apj` firmware is uploaded
+over serial. The board automatically reboots into the new firmware when done.
+
+#### Path C: ST-Link / SWD (recovery or debug workflow)
+
+Requires an ST-Link v2 wired to the SWD pads (see section 10). The
+`micoair-h743.cfg` OpenOCD config works for all STM32H7x boards.
+
+**IMPORTANT: Board must be in STM32 ROM DFU mode (hold BOOT + plug power) before
+connecting OpenOCD.** ArduPilot remaps SWD pins at startup — OpenOCD cannot connect
+to a running board.
+
+```bash
 openocd -f micoair-h743.cfg \
   -c "program build/DAKEFPVH743Pro/bin/arducopter_with_bl.hex verify reset exit"
 ```
 
-For a one-step build + flash:
-```bash
-./waf copter && \
-openocd -f micoair-h743.cfg \
-  -c "program build/DAKEFPVH743Pro/bin/arducopter_with_bl.hex verify reset exit"
-```
-
-### Method C: OTA via Ground Station (Firmware Updates)
-
-Once ArduPilot is running, use Mission Planner or QGroundControl:
-- Connect via USB or telemetry
-- Use the `.apj` file: `build/DAKEFPVH743Pro/bin/arducopter.apj`
-- Or point the GCS at firmware.ardupilot.org for stock releases
-
-**Note:** OTA updates do not erase parameters or calibration data, unlike a full
-ST-Link flash of `with_bl.hex` which flashes the entire chip.
+OpenOCD parses Intel HEX natively — no `objcopy` conversion needed here.
 
 ---
 
-## 7. GDB Debugging
+## 8. GDB Debugging
 
 ```bash
 # Terminal 1: start OpenOCD server
@@ -194,7 +250,7 @@ continue
 
 ---
 
-## 8. Recommended Initial Parameters
+## 9. Recommended Initial Parameters
 
 After first flash, set these before anything else:
 
@@ -215,7 +271,7 @@ SERVO_BLH_AUTO = 0          # Disable auto-detection
 
 ---
 
-## 9. SWD Pinout (for ST-Link connection)
+## 10. SWD Pinout (for ST-Link connection)
 
 The board exposes SWD pads. Connections to ST-Link v2:
 
