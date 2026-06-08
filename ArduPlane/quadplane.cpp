@@ -1717,7 +1717,7 @@ void QuadPlane::update(void)
 
 #if ENABLE_TRICOPTER_VTOL_BACKEND
     // Inject Plane Demands for Unified Mixing (Run Unconditionally)
-    if (g_config.tricopter_is_blimp) {
+    {
         AP_Motors6DOF::PlaneInputs plane_inputs;
         plane_inputs.pitch_cd = plane.nav_pitch_cd;
         plane_inputs.roll_cd = plane.nav_roll_cd;
@@ -1794,11 +1794,37 @@ void QuadPlane::update(void)
             transition->force_transition_complete();
             assisted_flight = false;
         } else {
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+            if (!g_config.tricopter_is_blimp) {
+                // Avatar: skip transition->update() entirely in plane mode to prevent
+                // multicopter_attitude_rate_update() (called via hold_hover/hold_stabilize)
+                // from corrupting _attitude_target, _pd_scale and other attitude controller
+                // state that feeds into rate_controller_run().
+                transition->force_transition_complete();
+            } else {
+                transition->update();
+            }
+#else
             transition->update();
+#endif
 #if ENABLE_TRICOPTER_VTOL_BACKEND
             // Force motor output in Plane/FBWA modes because Blimp uses
             // AP_Motors backend for ALL flight (Unified Mixing).
             set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
+            if (!g_config.tricopter_is_blimp) {
+                // Avatar: directly set pitch rate target proportional to pitch error from level (0°).
+                // Uses rate_bf_pitch_target() to write _ang_vel_body.y directly — same pattern as
+                // rate_bf_yaw_target() — bypassing attitude_controller_run_quat() entirely.
+                // This avoids _attitude_target slewing from previous transition (nav_pitch_cd).
+                // I-term is also reset each loop since we use the rate PID as a P-only signal.
+                attitude_control->get_rate_pitch_pid().set_integrator(0.0f);
+                const float pitch_error_rad = -ahrs.get_pitch();  // 0° - actual_pitch
+                const float att_kP = attitude_control->get_angle_pitch_p().kP();
+                const float pitch_rate_cds = degrees(att_kP * pitch_error_rad) * 100.0f;
+                attitude_control->rate_bf_pitch_target(pitch_rate_cds);
+                attitude_control->set_throttle_out(get_pilot_throttle(), false, 0);
+
+            }
             motors_output(true); // Run WITH rate controller to keep PIDs active (Foundation for future hybrid modes)
 #endif
         }

@@ -61,9 +61,38 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         outputs.tilt_angle = 1.0f - ((pitch_in >= 0.0f) ? tilt_delta : 0.0f);
         float throttle_pct = inputs.plane.throttle_pct * 0.01f;
         outputs.motor_thrust[AVATAR_MOT_WING_LEFT] = outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = throttle_pct;
-        outputs.rudder_out = inputs.plane.rudder_input / 4500.0f;
-        // Rear motor: (throttle - pitch) scaled by tilt engagement; scales to 0 when wings horizontal
-        outputs.motor_thrust[AVATAR_MOT_YAW] = constrain_float((throttle_pct - pitch_in) * tilt_delta, 0.0f, 1.0f);
+        outputs.rudder_out   = inputs.plane.rudder_input / 4500.0f;
+        outputs.aileron_out  = -inputs.plane.aileron_input / 4500.0f;
+        // Rear motor: closed-loop pitch from copter attitude controller, scaled by cos(tilt).
+        // cos(tilt) = 1 at hover (full authority), 0 at wings-horizontal (no authority).
+        // inputs.pitch is live in plane mode because hold_stabilize() runs before motors_output().
+        // cos factor also prevents PID windup from firing when wings are horizontal.
+        float tilt_deg_b = outputs.tilt_angle * g_config.forward_flight_physical_angle_deg;
+        float cos_tilt_b = fmaxf(0.0f, cosf(radians(tilt_deg_b)));
+        outputs.motor_thrust[AVATAR_MOT_YAW] = constrain_float((throttle_pct - inputs.pitch) * cos_tilt_b, 0.0f, 1.0f);
+
+#if AVATAR_DEBUG_LOG
+        {
+            static uint32_t last_b_log_ms = 0;
+            uint32_t now_ms = AP_HAL::millis();
+            if (now_ms - last_b_log_ms >= 1000) {
+                last_b_log_ms = now_ms;
+                gcs().send_text(MAV_SEVERITY_INFO,
+                    "AVB elev=%.2f pin=%.2f td=%.2f thr=%.2f ipitch=%.2f",
+                    (double)(inputs.plane.elevator_input / 4500.0f),
+                    (double)pitch_in,
+                    (double)tilt_delta,
+                    (double)throttle_pct,
+                    (double)inputs.pitch);
+                gcs().send_text(MAV_SEVERITY_INFO,
+                    "AVB tilt=%.2f cos=%.2f rear=%.2f ahrs_pitch_deg=%.1f",
+                    (double)outputs.tilt_angle,
+                    (double)cos_tilt_b,
+                    (double)outputs.motor_thrust[AVATAR_MOT_YAW],
+                    (double)degrees(inputs.ahrs_pitch_rad));
+            }
+        }
+#endif
 
     } else {
         // =====================================================================

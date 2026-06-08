@@ -125,7 +125,67 @@ Given a normalized pitch demand `pitch_in` (0→1):
 
 **PID implication:** The elevator covers its full deflection range in only `threshold` fraction of the pitch demand range (effective gain = `1 / threshold` = 2× at default 0.5). ArduPlane's pitch PID gains are pre-halved to compensate: `PTCH_RATE_P = 0.02`, `PTCH_RATE_I = 0.075`, `PTCH_RATE_FF = 0.1725` (half of ArduPlane defaults). If `elevator_tilt_handoff_point` changes, re-scale these gains proportionally.
 
+**`PTCH_LIM_MAX_DEG` must be set to 90°:** The default ArduPlane pitch limit (20°) exists to prevent stalls on conventional fixed-wing aircraft. The Avatar has built-in stall protection — the elevator_tilt_split is the stall recovery mechanism. A 20° limit prevents the attitude controller from ever generating enough elevator demand to saturate and trigger motor tilt, making FBWA takeoff impossible. At 90°, full pitch-up stick generates a large attitude error at zero airspeed, the elevator quickly saturates, and the motors tilt to provide vertical lift. At cruise speed TECS manages pitch conservatively regardless of the limit. Set `PTCH_LIM_MAX_DEG = 90` in the golden param file.
+
 **V-tail mixing:** Avatar owns all V-tail servo outputs. Mixing is computed in `AP_Motors6DOF::output_to_motors()`: `vtail_left = elevator_out + rudder_out`, `vtail_right = elevator_out - rudder_out`. This runs in both copter and plane modes — in copter mode `elevator_out = 0`, so the V-tail provides yaw authority only.
+
+### 4.4.1 Rear Motor Pitch Stabilisation During Tilt (Plane Mode)
+
+**The problem:** As the wing motors tilt from horizontal toward vertical, their thrust vector rotates. This rotation generates an uncontrolled pitch-up moment on the airframe. The elevator is already saturated at this point (that is what triggered the tilt in the first place), so it has no headroom left to resist this moment. Without active counteraction the aircraft will pitch up uncontrollably as the wings rotate.
+
+**The solution:** The rear motor provides a nose-down pitching moment proportional to the aircraft's pitch deviation from level:
+
+```cpp
+float tilt_deg_b = outputs.tilt_angle * g_config.forward_flight_physical_angle_deg;
+float cos_tilt_b = fmaxf(0.0f, cosf(radians(tilt_deg_b)));
+rear_motor = (throttle_pct - inputs.pitch) * cos_tilt_b;
+```
+
+`inputs.pitch` is negative when the aircraft is nose-up (correction wanted), making `throttle - negative = more than throttle`, so the rear motor increases to push the nose down. The `cos(tilt_deg)` factor gates the rear motor authority: zero when wings are horizontal (forward flight), full when wings are vertical (hover).
+
+**Why `cos(tilt_deg)` not `tilt_delta`:** `tilt_delta` is a linear function of excess pitch demand — not the actual physical motor angle. Using `cos(tilt_angle × 90°)` matches the geometry and is consistent with State C: `rear = (throttle - inputs.pitch) × cos_tilt`.
+
+---
+
+**Implementation — how `inputs.pitch` is correctly generated in plane mode:**
+
+The copter attitude controller (`AC_AttitudeControl_Multi`) produces `inputs.pitch` (= `_pitch_in`) via its rate PID. Getting a correct, responsive signal required solving several non-obvious problems:
+
+**Problem 1 — `_attitude_target` slewing:** The angle controller (`input_euler_angle_roll_pitch_euler_rate_yaw`) internally maintains a `_attitude_target` quaternion that slews toward the commanded angle. During FBWA transition with max pitch-up stick, `_attitude_target` gets set to `nav_pitch_cd` (≈90°). Even after commanding 0°, it slews back slowly — so `_ang_vel_body.y` (the rate target fed to the rate PID) remains large and positive for many seconds, giving wrong-sign `inputs.pitch`.
+
+**Problem 2 — `attitude_controller_run_quat()` side effects:** `input_rate_bf_roll_pitch_yaw()` also calls `attitude_controller_run_quat()` internally, which recomputes `_ang_vel_body` from the slewing `_attitude_target`. Overriding `_ang_vel_body.y` after the call still doesn't help because `attitude_controller_run_quat()` also corrupts `_pd_scale` and other state that feeds `rate_controller_run()`.
+
+**Problem 3 — `multicopter_attitude_rate_update()` interference:** `transition->update()` calls `hold_hover()` or `hold_stabilize()` depending on transition state, which call `multicopter_attitude_rate_update()`, which calls `attitude_controller_run_quat()` again — corrupting the state even after our corrections.
+
+**The fix — three parts:**
+
+**(a)** Add `rate_bf_pitch_target()` to `AC_AttitudeControl.h` (mirrors existing `rate_bf_yaw_target()`). This directly writes `_ang_vel_body.y` without invoking `attitude_controller_run_quat()`:
+
+```cpp
+void rate_bf_pitch_target(float rate_cds) { _ang_vel_body.y = radians(rate_cds * 0.01f); }
+```
+
+**(b)** Skip `transition->update()` for Avatar in plane mode (use `force_transition_complete()` instead). This prevents `multicopter_attitude_rate_update()` from ever running and corrupting attitude controller state.
+
+**(c)** Compute the pitch rate target directly from AHRS pitch, bypassing the angle controller entirely:
+
+```cpp
+// In QuadPlane::update(), ENABLE_TRICOPTER_VTOL_BACKEND block, plane mode, Avatar only:
+attitude_control->get_rate_pitch_pid().set_integrator(0.0f);  // prevent I-term carryover
+const float pitch_error_rad = -ahrs.get_pitch();              // 0° - actual_pitch
+const float att_kP = attitude_control->get_angle_pitch_p().kP();
+const float pitch_rate_cds = degrees(att_kP * pitch_error_rad) * 100.0f;
+attitude_control->rate_bf_pitch_target(pitch_rate_cds);
+attitude_control->set_throttle_out(get_pilot_throttle(), false, 0);
+motors_output(true);
+```
+
+The rate target is `att_kP × (0° - actual_pitch)`: negative when nose-up (wants nose-down rate), positive when nose-down. `motors_output(true)` then runs the rate PID with this as the target, producing correct `_pitch_in`. The I-term is reset each loop because we use the rate PID purely as a P-gain amplifier — accumulated integral from prior nose-down phases would otherwise keep `inputs.pitch` positive after the aircraft pitches back up.
+
+**Files changed:**
+- `ArduPlane/quadplane.cpp` — skip `transition->update()` for Avatar in plane mode; pitch rate target computation
+- `libraries/AC_AttitudeControl/AC_AttitudeControl.h` — add `rate_bf_pitch_target()`
+- `libraries/AP_Motors/AP_Motors6DOF_AvatarMixer.cpp` — rear motor uses `inputs.pitch` with `cos_tilt_b`
 
 ### 4.5 Copter Mode Elevator Behavior
 
