@@ -461,3 +461,74 @@ This validates the core 6DOF thrust-vector concept without relying on aerodynami
 **Remaining unknowns:**
 - Plane-mode stall-prevention loop stability is theoretically sound but untested — behavior at the transition boundary is the highest-uncertainty element of the design
 - ArduPlane PID gain tuning for the elevated elevator gain from `elevator_tilt_handoff_point = 0.5` (effective 2× gain in elevator-only zone)
+
+---
+
+## 8. Production Aircraft Design
+
+The T1 Ranger is a test platform to validate the Avatar control architecture. The production aircraft is a purpose-built design derived from the lessons of the T1 Ranger program. This section captures the production design intent for future implementation.
+
+### 8.1 Mission Profile
+
+Advertising aircraft optimized for low-speed stable flight with variable payload between missions. The primary design constraint is sustained, stable low-speed flight rather than cruise efficiency or high-speed performance. Flight envelope not yet formally established.
+
+### 8.2 Wing Geometry — Low Aspect Ratio
+
+The production aircraft uses a **low aspect ratio wing**, explicitly rejecting high aspect ratio. Rationale:
+
+- **Stability is electronic, not aerodynamic.** The flight controller provides stabilization at rates far exceeding any passive aerodynamic restoring force. High AR exists primarily to provide passive stability and slow landing speeds — both of which are provided by other means in this design.
+- **Tip stall in turns.** High AR wings generate a large differential in lift across the span during turning flight — the outer wing moves faster, the inner wing slows toward stall. Low AR minimises this differential, allowing tighter turns at lower speeds without asymmetric tip stall.
+- **Thrust vectors provide low-speed authority.** The slow landing speed benefit of high AR is redundant when the motor tilt system provides lift and control authority at zero airspeed.
+- **Reverse stall risk.** On a high AR wing, aileron deflection can pop a pre-loaded wingtip out of stall, creating a violent asymmetric lift event that rolls the aircraft opposite to command — exactly the failure mode observed on the T1 Ranger before the elevon mixing was removed.
+
+Low AR allows the aircraft to turn tighter and fly slower without stall, with the flight controller handling stability electronically.
+
+### 8.3 Motor Placement — Forward and Below the Wings
+
+Motors are mounted **forward of and below the wings** on a separate tilting mechanism. They are not fixed to the wing and not at the wingtips. Two considerations drove this:
+
+**Not at wingtips (V-22 Osprey lesson):** Tilting rotors at the wingtips disturb the wing's pressure differential as the rotor wash angle changes through the transition. This creates unpredictable asymmetric lift conditions — the primary cause of the V-22 Osprey's unsafe handling qualities. An ideal aircraft maintains a consistent high pressure differential along the wing at all times, independent of what the motors are doing.
+
+**Forward and below:** This placement keeps motor wake clear of the wing's lifting surface throughout the tilt range. The separate mounting structure means the wing's aerodynamic environment is decoupled from the motor tilt angle.
+
+### 8.4 Independent Wing and Motor Rotation
+
+Wings and motors rotate on **separate independent axes**. This is the central architectural difference from the T1 Ranger, where motors are fixed to the wings and rotate 1:1.
+
+**Why not 1:1:** The wing and the motors have different optimal angles at every point in the transition. Forcing them to move together makes both suboptimal simultaneously. The wing wants to maintain its best lift-generating angle of attack relative to oncoming airflow. The motors want to vector thrust to balance lift and forward propulsion. These are different functions of airspeed.
+
+**The mixing function:** The two axes are coupled by a mixing curve, not a fixed ratio. They converge at both endpoints — both ~90° (vertical) in hover, both ~0° (horizontal) in cruise — but follow different paths through the transition:
+
+- **Motor angle schedule** is driven by the instantaneous thrust budget:
+  ```
+  motor_angle = atan2(drag, weight - aerodynamic_lift)
+  ```
+  As airspeed builds, aerodynamic lift increases with V² and vertical thrust requirement drops rapidly. The motor tilts toward horizontal fast. This is the same computation the TVC brain already performs via `atan2(forward_cmd, thrust_cmd)`.
+
+- **Wing angle schedule** is driven by the wing's aerodynamic polar — the wing tracks its optimal angle of attack relative to the oncoming airflow. This is a slow, gentle function of airspeed compared to the motor schedule.
+
+**The motor leads the wing through transition.** At any intermediate airspeed the motor is tilted further toward horizontal than the wing. They reconverge at cruise.
+
+**Deriving the mixing curve in practice:**
+1. Characterise the wing's polar (CL vs AoA), identify the optimal operating AoA
+2. Compute aerodynamic lift at each airspeed: `L = ½ρV²S·CL`
+3. Motor angle schedule: `atan2(drag(V), weight - L(V))`
+4. Wing angle schedule: `optimal_AoA + flight_path_angle(V)`
+5. Both curves plotted against airspeed yield the mixing function — two independent lookup tables, one per axis, with airspeed as the common input
+
+### 8.5 Multi-Stage Flap System
+
+Wing rotation is achieved through **compound flaps — a flap on a flap** — rather than a single rotating wing spar. Each stage contributes a portion of the total angle change. This distributes mechanical forces across multiple hinge points rather than concentrating them at a single axis, and keeps each stage operating within its aerodynamically valid deflection range.
+
+**Hinge placement:** The ratio between hinge positions across stages is derived from the wing's airfoil geometry. The goal is to maintain attached flow and preserve pressure differential at every deflection stage. The exact placement is therefore airfoil-dependent and must be computed once the production airfoil is selected.
+
+**Airfoil selection:** The airfoil is optimised for low-speed performance consistent with the advertising mission profile. The multi-stage flap geometry is then derived from that airfoil's polar rather than the other way around.
+
+### 8.6 Variable Payload Handling
+
+Payload varies between missions. This affects the mixing curve asymmetrically:
+
+- **Wing angle schedule is fixed** — it is a function of airfoil geometry and aerodynamics, independent of weight.
+- **Motor angle schedule is weight-dependent** — heavier payload increases vertical thrust requirement at every airspeed, shifting the motor angle curve upward (motors stay more vertical for longer before tilting forward).
+
+The flight controller must therefore be weight-aware to execute the correct motor schedule. This can be achieved via explicit payload weight input before flight or via in-flight weight estimation from the relationship between throttle and observed climb/sink rate.
