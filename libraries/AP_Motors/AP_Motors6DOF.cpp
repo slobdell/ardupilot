@@ -293,12 +293,12 @@ void AP_Motors6DOF::output_to_motors()
                 float elev = is_shut_down ? 0.0f : _mixer_results.elevator_out;
                 float rud  = is_shut_down ? 0.0f : _mixer_results.rudder_out;
                 float ail  = is_shut_down ? 0.0f : _mixer_results.aileron_out;
-                // Scripting3 = elevon left,  Scripting4 = elevon right
-                // elev dominates sign: same direction for pitch, opposite for roll.
+                // Scripting3 = aileron left, Scripting4 = aileron right
+                // Pure differential — elevator is handled entirely by the V-tail (Scripting5/6).
                 SRV_Channels::set_output_norm(SRV_Channel::k_scripting3,
-                    constrain_float(elev + ail, -1.0f, 1.0f));
+                    constrain_float(ail, -1.0f, 1.0f));
                 SRV_Channels::set_output_norm(SRV_Channel::k_scripting4,
-                    constrain_float(elev - ail, -1.0f, 1.0f));
+                    constrain_float(-ail, -1.0f, 1.0f));
                 // Scripting5 = vtail left,   Scripting6 = vtail right
                 SRV_Channels::set_output_norm(SRV_Channel::k_scripting5,
                     constrain_float(elev + rud, -1.0f, 1.0f));

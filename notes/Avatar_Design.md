@@ -194,9 +194,9 @@ In copter mode the elevator (V-tail pitch surface) tracks the wing tilt angle vi
 - Wings vertical (hover, 0°): `cos(0°) = 1.0` → elevator full up
 - Wings horizontal (forward, 90°): `cos(90°) = 0.0` → elevator neutral
 
-**Why the bias exists:** This mirrors the blimp design philosophy. When hovering into a headwind, the upward elevator deflection generates a passive nose-up aerodynamic moment, reducing the pitch load on the front motors. At zero airspeed the deflection is inert and costs nothing. The `cos(tilt_deg)` scaling ensures the bias fades naturally to zero as the wings rotate horizontal toward plane mode, at which point ArduPlane's pitch controller takes over active control.
+**Why the bias is nose-down:** The rear motor runs at throttle-proportional thrust in hover, generating a nose-up pitching moment. The elevator counters this with a passive nose-down bias (`-cos_tilt`). This is the opposite sign from the blimp, which has no rear motor and uses a nose-up bias as a passive headwind trim. The `cos(tilt_deg)` scaling ensures the bias fades naturally to zero as the wings rotate horizontal toward plane mode, at which point ArduPlane's pitch controller takes over active control.
 
-**Key distinction:** The elevator in copter mode is a trim schedule, not a feedback control signal. Pitch stabilization is handled by the 6DOF attitude controller via motor thrust (rear motor + wing motor differential). The elevator `cos_tilt` curve is purely a feedforward trim and does not conflict with the attitude controller.
+**Key distinction:** The elevator in copter mode is a trim schedule, not a feedback control signal. Pitch stabilization is handled by the 6DOF attitude controller via motor thrust (rear motor + wing motor differential). The elevator `-cos_tilt` curve is purely a feedforward trim and does not conflict with the attitude controller.
 
 ### 4.6 Tilt Trig Factors
 
@@ -398,8 +398,8 @@ mixer_in.surface_pitch = _pilot_pitch;
 | 3 | Rear tail motor ESC | Motor 3 | `SERVO3_FUNCTION = 35` | — |
 | 4 | Right wing motor ESC | Motor 2 | `SERVO4_FUNCTION = 34` | — |
 | 5 | Wing tilt servo | Scripting2 | `SERVO5_FUNCTION = 95` | `tilt_angle` |
-| 6 | Elevon left | Scripting3 | `SERVO6_FUNCTION = 96` | `aileron_out + elevator_out` |
-| 7 | Elevon right | Scripting4 | `SERVO7_FUNCTION = 97` | `aileron_out - elevator_out` |
+| 6 | Aileron left | Scripting3 | `SERVO6_FUNCTION = 96` | `aileron_out` |
+| 7 | Aileron right | Scripting4 | `SERVO7_FUNCTION = 97` | `-aileron_out` |
 | 8 | V-tail left | Scripting5 | `SERVO8_FUNCTION = 98` | `elevator_out + rudder_out` |
 | 9 | V-tail right | Scripting6 | `SERVO9_FUNCTION = 99` | `elevator_out - rudder_out` |
 
@@ -430,7 +430,7 @@ SERVO5_MAX  = 1827
 
 **All surface outputs use Scripting channels** (Scripting2–6). This is deliberate — ArduPlane's own mixing pipeline (`stabilize_roll`, `stabilize_pitch`, elevon mixer, vtail mixer) runs in QSTABILIZE and writes to named channels like `k_aileron` and `k_vtail_left`. Using Scripting channels fully isolates our outputs from ArduPlane's mixer. Never assign these servos to `k_aileron`, `k_elevator`, `k_rudder`, `k_vtail_left`, or `k_vtail_right`.
 
-The elevon surfaces combine elevator and aileron authority in our mixer. The V-tail surfaces combine elevator and rudder authority. Both are computed in `AP_Motors6DOF::output_to_motors()` in `libraries/AP_Motors/AP_Motors6DOF.cpp`.
+The aileron surfaces (Scripting3/4) carry pure differential roll — no elevator component. The V-tail surfaces (Scripting5/6) carry elevator and rudder authority. Both are computed in `AP_Motors6DOF::output_to_motors()` in `libraries/AP_Motors/AP_Motors6DOF.cpp`.
 
 ### 7.2 ArduPilot Configuration
 Configure the T1 Ranger as a **QuadPlane**. This is primarily to access copter (Q) modes for testing the mixer logic. The production intent is that plane mode works at all times, but copter mode provides a controlled environment to validate motor mixing before full-plane testing.

@@ -155,8 +155,12 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // the tilt angle in response to attitude changes, so the two loops don't fight each other.
         // Headroom is computed around the pitch-shifted base to keep roll clipping symmetric.
         float base_thrust = throttle_thrust + inputs.pitch;
+        outputs.limit.pitch = (base_thrust > 1.0f || base_thrust < 0.0f);
+        base_thrust = constrain_float(base_thrust, 0.0f, 1.0f);
         float roll_headroom = fminf(1.0f - base_thrust, base_thrust);
-        float scaled_roll = constrain_float(inputs.roll * roll_effectiveness, -roll_headroom, roll_headroom);
+        float desired_roll = inputs.roll * roll_effectiveness;
+        float scaled_roll = constrain_float(desired_roll, -roll_headroom, roll_headroom);
+        outputs.limit.roll = (fabsf(desired_roll) > roll_headroom);
         outputs.motor_thrust[AVATAR_MOT_WING_LEFT]  = base_thrust + scaled_roll;
         outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = base_thrust - scaled_roll;
         // Rear motor fades to zero at 90° and stays off beyond — it has no thrust
@@ -167,7 +171,7 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // Motors use PID-derived inputs.roll/yaw for closed-loop stability.
         outputs.rudder_out   = inputs.surface_yaw;
         outputs.aileron_out  = -inputs.surface_roll;
-        outputs.elevator_out = cos_tilt;
+        outputs.elevator_out = -cos_tilt;
 
 #if AVATAR_DEBUG_LOG
         {
