@@ -1,4 +1,6 @@
 #include "Plane.h"
+#include <AP_CustomConfig/AP_CustomConfig.h>
+#include <AP_Motors/AP_Motors6DOF.h>
 
 /*
   calculate speed scaling number for control surfaces. This is applied
@@ -26,17 +28,31 @@ float Plane::calc_speed_scaler(void)
 #if HAL_QUADPLANE_ENABLED
         if (quadplane.in_vtol_mode() && arming.is_armed_and_safety_off()) {
             // when in VTOL modes limit surface movement at low speed to prevent instability
-            float threshold = airspeed_min * 0.5;
-            if (aspeed < threshold) {
-                float new_scaler = linear_interpolate(0.001, g.scaling_speed / threshold, aspeed, 0, threshold);
-                speed_scaler = MIN(speed_scaler, new_scaler);
-
-                // we also decay the integrator to prevent an integrator from before
-                // we were at low speed persistent at high speed
+#if ENABLE_TRICOPTER_VTOL_BACKEND && (ACTIVE_CONFIG == CONFIG_TYPE_AVATAR)
+            // ARSPD_FBW_MIN is 0 for Avatar (zero-stall-speed aircraft), so the airspeed
+            // threshold would always be 0 and never fire. Gate on tilt angle instead:
+            // surfaces are aerodynamically ineffective when rotors are near-vertical.
+            const float tilt_deg = ((AP_Motors6DOF*)quadplane.motors)->get_tilt_deg();
+            if (tilt_deg < 45.0f) {
                 rollController.decay_I();
                 pitchController.decay_I();
                 yawController.decay_I();
             }
+#else
+            {
+                float threshold = airspeed_min * 0.5;
+                if (aspeed < threshold) {
+                    float new_scaler = linear_interpolate(0.001, g.scaling_speed / threshold, aspeed, 0, threshold);
+                    speed_scaler = MIN(speed_scaler, new_scaler);
+
+                    // we also decay the integrator to prevent an integrator from before
+                    // we were at low speed persistent at high speed
+                    rollController.decay_I();
+                    pitchController.decay_I();
+                    yawController.decay_I();
+                }
+            }
+#endif
         }
 #endif
     } else if (arming.is_armed_and_safety_off()) {

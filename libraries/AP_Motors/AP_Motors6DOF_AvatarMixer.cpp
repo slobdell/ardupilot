@@ -49,16 +49,20 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
     if (in_plane_mode) {
         // =====================================================================
         // --- STATE B: PLANE MODE ---
-        // Wings horizontal for forward flight; elevator handles pitch.
+        // Pilot pitch stick drives tilt angle directly (positive = more vertical).
+        // Elevator is strictly attitude control: nav_pitch_cd=0 in FBWA so the
+        // pitch PID integrator winds up to whatever position holds level.
         // =====================================================================
         state.manual_override_active = false;
-        float pitch_in = inputs.plane.elevator_input / 4500.0f;
-        float tilt_delta;
-        elevator_tilt_split(pitch_in, g_config.elevator_tilt_handoff_point,
-                            outputs.elevator_out, tilt_delta);
 
-        // Wings horizontal until elevator saturates, then tilt toward vertical on pitch-up only
-        outputs.tilt_angle = 1.0f - ((pitch_in >= 0.0f) ? tilt_delta : 0.0f);
+        // Tilt: pilot pitch up (positive) rotates rotors toward vertical (tilt_angle -> 0).
+        // Pitch down has no effect since tilt_angle is clamped at 1.0 (full horizontal).
+        outputs.tilt_angle = constrain_float(1.0f - inputs.plane.pitch_tilt_demand, 0.0f, 1.0f);
+
+        // Elevator: pure attitude error output from the plane pitch PID. No pilot
+        // feedforward — the integrator naturally settles at the level-holding position.
+        outputs.elevator_out = inputs.plane.elevator_input / 4500.0f;
+
         float throttle_pct = inputs.plane.throttle_pct * 0.01f;
         outputs.motor_thrust[AVATAR_MOT_WING_LEFT] = outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = throttle_pct;
         outputs.rudder_out   = inputs.plane.rudder_input / 4500.0f;
@@ -69,7 +73,9 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // cos factor also prevents PID windup from firing when wings are horizontal.
         float tilt_deg_b = outputs.tilt_angle * g_config.forward_flight_physical_angle_deg;
         float cos_tilt_b = fmaxf(0.0f, cosf(radians(tilt_deg_b)));
-        outputs.motor_thrust[AVATAR_MOT_YAW] = constrain_float((throttle_pct - inputs.pitch) * cos_tilt_b, 0.0f, 1.0f);
+        float rear_demand = (throttle_pct - inputs.pitch) * cos_tilt_b;
+        outputs.limit.pitch = (rear_demand > 1.0f || rear_demand < 0.0f);
+        outputs.motor_thrust[AVATAR_MOT_YAW] = constrain_float(rear_demand, 0.0f, 1.0f);
 
 #if AVATAR_DEBUG_LOG
         {
@@ -78,10 +84,9 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
             if (now_ms - last_b_log_ms >= 1000) {
                 last_b_log_ms = now_ms;
                 gcs().send_text(MAV_SEVERITY_INFO,
-                    "AVB elev=%.2f pin=%.2f td=%.2f thr=%.2f ipitch=%.2f",
-                    (double)(inputs.plane.elevator_input / 4500.0f),
-                    (double)pitch_in,
-                    (double)tilt_delta,
+                    "AVB elev=%.2f ptilt=%.2f thr=%.2f ipitch=%.2f",
+                    (double)outputs.elevator_out,
+                    (double)inputs.plane.pitch_tilt_demand,
                     (double)throttle_pct,
                     (double)inputs.pitch);
                 gcs().send_text(MAV_SEVERITY_INFO,

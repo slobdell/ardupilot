@@ -37,6 +37,7 @@ struct MixerInputs {
         float elevator_input;
         float aileron_input;
         float transition_progress; // 0.0 (Hover) -> 1.0 (Plane)
+        float pitch_tilt_demand;   // Pilot pitch stick -1..1; positive = pitch up = tilt rotors toward vertical
     } plane;
 
     // System Perception

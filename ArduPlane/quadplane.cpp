@@ -1730,7 +1730,10 @@ void QuadPlane::update(void)
         plane_inputs.elevator_input = SRV_Channels::get_output_scaled(SRV_Channel::k_elevator);
         
         // SBL: Force binary transition state based on mode for reliable testing
-        plane_inputs.transition_progress = in_vtol_mode() ? 0.0f : 1.0f; 
+        plane_inputs.transition_progress = in_vtol_mode() ? 0.0f : 1.0f;
+        // In plane modes, pilot pitch stick controls tilt angle directly.
+        // In VTOL modes the copter attitude controller owns pitch; demand is zero.
+        plane_inputs.pitch_tilt_demand = in_vtol_mode() ? 0.0f : plane.channel_pitch->norm_input();
         ((AP_Motors6DOF*)motors)->set_plane_inputs(plane_inputs);
     }
 #endif

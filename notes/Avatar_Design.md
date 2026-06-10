@@ -110,22 +110,44 @@ The stall-prevention behavior is a natural consequence of the pitch compensation
 
 This is a continuous, proportional response. There is no threshold or mode switch. The wings tilt as much as the pitch deviation demands.
 
-### 4.4 Elevator-First Pitch Control in Plane Mode
+### 4.4 Plane Mode Pitch Control
 
-In plane mode, pitch authority is split between the elevator (V-tail) and motor tilt. The split is controlled by `g_config.elevator_tilt_handoff_point` (default `0.5`, set in `avatarConfig`).
+The Avatar is optimised for maintaining a **level fuselage at all times** — it carries advertising signage and stability matters more than pitch agility. This drives a design that differs from both the blimp and standard ArduPlane.
 
-Given a normalized pitch demand `pitch_in` (0→1):
+#### Tilt rotors — direct pilot control
 
-| Demand range | Elevator | Motor tilt |
-|---|---|---|
-| 0 → `threshold` | Proportional 0→full | Stays at wings-horizontal (1.0) |
-| `threshold` → 1.0 | Saturated at full | Tilts wings toward vertical (1.0→0.0) |
+The pilot pitch stick controls tilt angle directly. There is no elevator-first handoff:
 
-**Why:** At cruise speeds the elevator has aerodynamic authority and handles pitch alone. As the aircraft slows and elevator saturates, motor tilt provides the additional pitch-up moment needed to prevent stall — the same continuous, automatic response as the TVC pitch compensation in copter mode.
+```cpp
+// AP_Motors6DOF_AvatarMixer.cpp, plane mode block
+outputs.tilt_angle = constrain_float(1.0f - inputs.plane.pitch_tilt_demand, 0.0f, 1.0f);
+```
 
-**PID implication:** The elevator covers its full deflection range in only `threshold` fraction of the pitch demand range (effective gain = `1 / threshold` = 2× at default 0.5). ArduPlane's pitch PID gains are pre-halved to compensate: `PTCH_RATE_P = 0.02`, `PTCH_RATE_I = 0.075`, `PTCH_RATE_FF = 0.1725` (half of ArduPlane defaults). If `elevator_tilt_handoff_point` changes, re-scale these gains proportionally.
+`pitch_tilt_demand` is `channel_pitch->norm_input()` (-1..1), populated in `quadplane.cpp` for plane modes (zero in VTOL modes). Pitch-up (positive) tilts rotors toward vertical; pitch-down is clipped to no-op since `tilt_angle` is clamped at 1.0 (horizontal). The tilt rotors have no pitch-down range.
 
-**`PTCH_LIM_MAX_DEG` must be set to 90°:** The default ArduPlane pitch limit (20°) exists to prevent stalls on conventional fixed-wing aircraft. The Avatar has built-in stall protection — the elevator_tilt_split is the stall recovery mechanism. A 20° limit prevents the attitude controller from ever generating enough elevator demand to saturate and trigger motor tilt, making FBWA takeoff impossible. At 90°, full pitch-up stick generates a large attitude error at zero airspeed, the elevator quickly saturates, and the motors tilt to provide vertical lift. At cruise speed TECS manages pitch conservatively regardless of the limit. Set `PTCH_LIM_MAX_DEG = 90` in the golden param file.
+**Why not elevator-first (blimp approach)?** The blimp design tilts rotors only after elevator saturation. That made sense for the blimp (no rear motor, optimised for efficiency). The Avatar has a rear motor and is optimised for level station-keeping, so the pilot should directly command tilt angle. The elevator's job is entirely separate.
+
+#### Elevator — strictly attitude control
+
+The elevator has one job: hold the fuselage level. It receives no pilot pitch input and has no feedforward.
+
+In `mode_fbwa.cpp`, for Avatar builds only:
+```cpp
+#if ENABLE_TRICOPTER_VTOL_BACKEND && (ACTIVE_CONFIG == CONFIG_TYPE_AVATAR)
+    plane.nav_pitch_cd = 0;   // target level always; PID integrator handles steady-state
+#endif
+```
+
+In the mixer:
+```cpp
+outputs.elevator_out = inputs.plane.elevator_input / 4500.0f;  // ArduPlane pitch PID passthrough
+```
+
+ArduPlane's pitch controller (`AP_PitchController`) is a full PID with default I=0.15. With `nav_pitch_cd = 0`, the integrator winds up to whatever elevator-down position is needed to hold level against the combined pitch moment from tilt angle and rear motor. No aerodynamic characterisation required — the integrator finds equilibrium automatically.
+
+**Why no tilt-angle feedforward on the elevator?** This was considered and rejected. A feedforward term based on tilt position would pre-position the elevator, but breaks the nose-down case (tilt and attitude error would fight each other when the aircraft has deviated nose-down). A feedforward based on tilt rate was also considered but fails at steady-state tilt before takeoff (rate = 0, elevator returns to neutral). The integrator achieves the same steady-state result without any of these edge cases.
+
+**`PTCH_LIM_MAX_DEG`:** No longer needs to be 90° (that was required by the old elevator-saturation-triggers-tilt design). With direct tilt control the pitch limit can be set conservatively. Tune to whatever attitude range makes sense for the mission.
 
 **V-tail mixing:** Avatar owns all V-tail servo outputs. Mixing is computed in `AP_Motors6DOF::output_to_motors()`: `vtail_left = elevator_out + rudder_out`, `vtail_right = elevator_out - rudder_out`. This runs in both copter and plane modes — in copter mode `elevator_out = 0`, so the V-tail provides yaw authority only.
 
@@ -143,7 +165,17 @@ rear_motor = (throttle_pct - inputs.pitch) * cos_tilt_b;
 
 `inputs.pitch` is negative when the aircraft is nose-up (correction wanted), making `throttle - negative = more than throttle`, so the rear motor increases to push the nose down. The `cos(tilt_deg)` factor gates the rear motor authority: zero when wings are horizontal (forward flight), full when wings are vertical (hover).
 
-**Why `cos(tilt_deg)` not `tilt_delta`:** `tilt_delta` is a linear function of excess pitch demand — not the actual physical motor angle. Using `cos(tilt_angle × 90°)` matches the geometry and is consistent with State C: `rear = (throttle - inputs.pitch) × cos_tilt`.
+**Why `cos(tilt_deg)` not `tilt_delta`:** `tilt_delta` was a linear function of excess pitch demand from the old elevator-split design — not the actual physical motor angle. Using `cos(tilt_angle × 90°)` matches the geometry and is consistent with copter mode: `rear = (throttle - inputs.pitch) × cos_tilt`.
+
+**`limit.pitch` anti-windup:** The rear motor demand is clipped by `constrain_float(..., 0, 1)`. When clipping occurs the copter pitch integrator (which produces `inputs.pitch`) must be told to stop winding up:
+
+```cpp
+float rear_demand = (throttle_pct - inputs.pitch) * cos_tilt_b;
+outputs.limit.pitch = (rear_demand > 1.0f || rear_demand < 0.0f);
+outputs.motor_thrust[AVATAR_MOT_YAW] = constrain_float(rear_demand, 0.0f, 1.0f);
+```
+
+`outputs.limit.pitch` flows to `AC_AttitudeControl_Multi` as the anti-windup flag for the copter pitch rate PID. It has no effect on ArduPlane's elevator PID, which manages its own limits internally.
 
 ---
 

@@ -51,10 +51,14 @@ public:
         float elevator_input;// Elevator servo input -4500..4500
         float aileron_input;// Aileron servo input -4500..4500
         float transition_progress; // 0.0 (VTOL) -> 1.0 (Plane)
+        float pitch_tilt_demand; // Pilot pitch stick -1..1; positive = pitch up = tilt rotors toward vertical
     };
     
     // Inject Plane state for hybrid control
     void set_plane_inputs(const PlaneInputs &inputs) { _plane_inputs = inputs; }
+
+    // Current tilt angle in degrees (0 = rotors vertical/hover, 90 = horizontal/forward flight)
+    float get_tilt_deg() const { return _mixer_state.current_tilt_deg; }
 
     // output_min - sends minimum values out to the motors
     void output_min() override;
