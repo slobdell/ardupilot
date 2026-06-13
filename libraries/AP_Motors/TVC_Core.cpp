@@ -266,6 +266,12 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_CoreState& state, c
 
 #if VTOL_MODE == true
     // --- VTOL ANGLE BLENDING LOGIC ---
+    // NOTE: This block is currently dead code. Both BlimpMixer and AvatarMixer only call
+    // tvc_run_main_logic() in copter mode, where transition_progress is always 0.0.
+    // The mixers handle plane mode themselves without invoking the TVC. As a result,
+    // transition_progress read here is always 0.0 and the blend always outputs the
+    // hover model unchanged. Consider removing this block if a gradual mid-transition
+    // TVC path is never implemented.
     float transition_progress = sbus_pwm_to_float(inputs.rc_in[TRANSITION_PROGRESS_CHANNEL], 0.0f, 1.0f);
     
     // Model A: Hover Control Output (already calculated and compensated)

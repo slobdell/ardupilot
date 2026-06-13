@@ -74,24 +74,9 @@ SERVO_BLH_AUTO = 0    # Disable auto-detection to prevent accidental DShot on se
 
 ## 4. hwdef Status in This Fork
 
-The DAKEFPVH743Pro hwdef exists in upstream ArduPilot (`origin/master`) but has
-**not been merged into this fork** (`fork/slobdell_base`). Before you can build
-custom firmware for this board from the fork, the hwdef must be cherry-picked in:
-
-```bash
-# From the fork/slobdell_base branch, cherry-pick the upstream hwdef commit:
-git cherry-pick <commit-hash-of-AP_HAL_ChibiOS-add-DAKEFPVH743>
-
-# Or copy the hwdef directory manually from upstream:
-git show origin/master:libraries/AP_HAL_ChibiOS/hwdef/DAKEFPVH743Pro > ...
-```
-
-The relevant upstream commits are (from `git log --oneline origin/master`):
-- `AP_HAL_ChibiOS: add DAKEFPVH743` — adds the standard and Pro hwdefs
-- `Tools: add DAKEFPVH743` — adds bootloaders
-
-Until the hwdef is merged, you can still flash **stock ArduPilot firmware** (from
-firmware.ardupilot.org) and use QGC/Mission Planner for parameter configuration.
+The DAKEFPVH743Pro hwdef is present in this fork at
+`libraries/AP_HAL_ChibiOS/hwdef/DAKEFPVH743Pro/`. Custom firmware can be built
+directly from this branch without any cherry-pick needed.
 
 ---
 

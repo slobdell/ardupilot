@@ -21,7 +21,6 @@ namespace AP_Motors6DOF_Mixer {
 #define BLIMP_ELEV_SERVO_FUNC   SRV_Channel::k_scripting4 // Function 97
 
 // --- Blimp Control Parameters ---
-#define BLIMP_ELEVATOR_SPLIT    0.0f 
 const float BLIMP_PLANE_FWD_ANGLE = 90.0f;
 const float MANUAL_YAW_DEADBAND = 0.05f;
 

@@ -52,5 +52,5 @@ QGC auto-detects flight controllers on USB. Plug in the DAKE or MicoAir board an
 ## ArduPilot-Specific Notes
 
 - QGC fully supports ArduPlane/ArduCopter/QuadPlane parameter sets.
-- Parameter names are identical to Mission Planner — all values in `Blimp_Setup_Guide.md` apply directly.
+- Parameter names are identical to Mission Planner — all values in `Blimp_Design.md` apply directly.
 - For custom firmware (our builds), QGC will prompt to download the latest stable firmware on connect — **decline this** and select "Skip" to keep your custom binary.

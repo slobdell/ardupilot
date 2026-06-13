@@ -114,6 +114,12 @@ This is a continuous, proportional response. There is no threshold or mode switc
 
 The Avatar is optimised for maintaining a **level fuselage at all times** — it carries advertising signage and stability matters more than pitch agility. This drives a design that differs from both the blimp and standard ArduPlane.
 
+**Dual-controller architecture in FBWA:** Two independent pitch loops run simultaneously in plane mode. They don't fight because they act on different actuators:
+- **Elevator surface** — driven by ArduPlane's fixed-wing pitch PID output (`SRV_Channel::k_elevator` → `inputs.plane.elevator_input`). This is the TECS/pitch controller chain.
+- **Rear motor thrust** — driven by the copter attitude controller's pitch demand (`inputs.pitch` from `AC_AttitudeControl_Multi`), gated by `cos(tilt_angle)`.
+
+The fixed-wing PID controls aerodynamic attitude; the copter PID provides supplemental authority via thrust. The `cos(tilt_angle)` gate fades the rear motor out as wings go horizontal, at which point aerodynamic surfaces are fully effective.
+
 #### Tilt rotors — direct pilot control
 
 The pilot pitch stick controls tilt angle directly. There is no elevator-first handoff:
@@ -123,7 +129,7 @@ The pilot pitch stick controls tilt angle directly. There is no elevator-first h
 outputs.tilt_angle = constrain_float(1.0f - inputs.plane.pitch_tilt_demand, 0.0f, 1.0f);
 ```
 
-`pitch_tilt_demand` is `channel_pitch->norm_input()` (-1..1), populated in `quadplane.cpp` for plane modes (zero in VTOL modes). Pitch-up (positive) tilts rotors toward vertical; pitch-down is clipped to no-op since `tilt_angle` is clamped at 1.0 (horizontal). The tilt rotors have no pitch-down range.
+`pitch_tilt_demand` is `channel_pitch->norm_input()` (-1..1), populated in `quadplane.cpp` for plane modes (zero in VTOL modes). Pitch-up (positive) tilts rotors toward vertical; pitch-down is clipped to no-op since `tilt_angle` is clamped at 1.0 (horizontal). The tilt rotors have no pitch-down range in the current implementation — see section 4.4.3 for the TODO to add this capability.
 
 **Why not elevator-first (blimp approach)?** The blimp design tilts rotors only after elevator saturation. That made sense for the blimp (no rear motor, optimised for efficiency). The Avatar has a rear motor and is optimised for level station-keeping, so the pilot should directly command tilt angle. The elevator's job is entirely separate.
 
@@ -219,6 +225,45 @@ The rate target is `att_kP × (0° - actual_pitch)`: negative when nose-up (want
 - `libraries/AC_AttitudeControl/AC_AttitudeControl.h` — add `rate_bf_pitch_target()`
 - `libraries/AP_Motors/AP_Motors6DOF_AvatarMixer.cpp` — rear motor uses `inputs.pitch` with `cos_tilt_b`
 
+### 4.4.2 Future: Reverse Flight in Plane Mode
+
+Reverse tilt (motors past vertical into a backward-facing position) while in FBWA is currently architecturally blocked. Three things would need to change:
+
+**1. Plane mode formula clamp.** `constrain_float(1.0f - pitch_tilt_demand, 0.0f, 1.0f)` lower-bounds at `0.0`. Full pitch-up stick gives `tilt_angle = 0.0` (vertical) — it cannot go negative. To reach reverse angles, the formula needs to change. For example: `1.0f - (1.0f + k) * pitch_tilt_demand` would map full pitch-up to a configurable negative tilt. This is a one-line change in `AvatarMixer::mix()`.
+
+**2. TECS throttle model.** TECS manages total energy assuming positive throttle = forward thrust. With motors reversed, positive throttle produces backward thrust — TECS's control law inverts. It would see low airspeed → increase throttle → more reverse thrust → further speed loss (positive feedback). Mitigation options: disable TECS when `tilt_angle < 0` (switch to direct pilot throttle-stick control), or invert the throttle-to-energy mapping for the reverse region.
+
+**3. Copter pitch controller sign.** In FBWA, `inputs.pitch` from the copter attitude controller drives the rear motor and front motor pitch mixing to hold the fuselage level. When front motors face backward, the sign of throttle-to-pitch coupling inverts — positive `inputs.pitch` (nose-up correction) increases front motor thrust, which now pushes the nose down rather than up. The correction loop becomes a destabilisation loop. Fix: negate `inputs.pitch` contribution when `tilt_angle < 0`, or suppress the copter attitude contribution in reverse and rely solely on the elevator PID.
+
+### 4.4.3 TODO: Past-Horizontal Tilt for Pitch-Down Descent (Needs Aircraft)
+
+**Use case:** In FBWA, pilot pitch-down → rotors tilt a few degrees past horizontal → motors produce a small downward force component → aircraft descends while elevator PID holds the fuselage level. Gives the pilot direct descent control without needing to reduce throttle or pitch the nose.
+
+**All plane mode abstractions hold.** At 95° physical tilt, `cos(95°) ≈ -0.09` → floored to zero by `fmaxf`. Rear motor contribution is zero. TECS throttle model is unaffected (5° past horizontal produces negligible reverse thrust). Elevator PID continues to drive attitude independently. The copter pitch sign inversion problem (section 4.4.2) does not apply — rear motor is already gated off before the sign would matter.
+
+**What needs to change — three things:**
+
+**1. Add `cruise_physical_angle_deg` to `CustomConfig`.** This separates "servo physical max" from "equilibrium cruise angle." The blimp already makes this distinction: `BLIMP_PLANE_FWD_ANGLE = 90.0f` (cruise) is separate from `forward_flight_physical_angle_deg = 180.0f` (servo max). For Avatar: `forward_flight_physical_angle_deg = 95.0f` (new servo max), `cruise_physical_angle_deg = 90.0f` (horizontal cruise). `cruise_norm = cruise_physical_angle_deg / forward_flight_physical_angle_deg = 0.947`.
+
+**2. Update `AvatarMixer` plane mode formula (one line).** Change:
+```cpp
+outputs.tilt_angle = constrain_float(1.0f - inputs.plane.pitch_tilt_demand, 0.0f, 1.0f);
+```
+to:
+```cpp
+float cruise_norm = g_config.cruise_physical_angle_deg / g_config.forward_flight_physical_angle_deg;
+outputs.tilt_angle = constrain_float(cruise_norm * (1.0f - inputs.plane.pitch_tilt_demand), 0.0f, 1.0f);
+```
+Neutral stick → `cruise_norm` (90° horizontal). Full pitch-up → 0.0 (vertical). Full pitch-down → `cruise_norm * 2.0` clamped to 1.0 (95°). Pitch-down authority is proportionally small (~5% of stick travel for 5°), which is correct for the gentle descent use case.
+
+**3. Cap copter mode TVC output at `cruise_norm` (one line).** After the TVC call in copter mode, add:
+```cpp
+outputs.tilt_angle = constrain_float(tvc_out.pitch_angle_norm, -1.0f, cruise_norm);
+```
+This prevents the TVC from commanding past horizontal in copter mode, where there is no use case for past-horizontal tilt.
+
+**Servo calibration (needs aircraft).** Horizontal has no hardware reference point (unlike vertical, which uses `SERVO5_TRIM`). Calibration procedure: physically set wings to exact horizontal, read the servo PWM, set `SERVO5_MIN` to that value. Then set the new physical max (e.g., 95°) as the actual MIN after extending travel. Keep `SERVO5_TRIM` at the vertical (hover) position — this is the invariant the TVC normalization depends on. FBWA equilibrium pitch is found by the ArduPlane pitch PID integrator, not by a static trim value, so there is no equivalent "horizontal trim" needed in the firmware.
+
 ### 4.5 Copter Mode Elevator Behavior
 
 In copter mode the elevator (V-tail pitch surface) tracks the wing tilt angle via `cos(tilt_deg)`:
@@ -242,7 +287,16 @@ float cos_tilt = fmaxf(0.0f, cosf(radians(state.current_tilt_deg)));
 
 `sin_tilt` was removed. Ailerons no longer scale by `sin_tilt`; they use the pilot roll stick input directly (see section 4.10).
 
-**Extending the servo range**: To allow tilt past 90°, change `forward_flight_physical_angle_deg` in `avatarConfig`. The TVC normalization and servo output layer are fully parametric. The mixer math is safe past 90° by construction.
+**Extending the servo range — forward (past 90°):** Change `forward_flight_physical_angle_deg` in `avatarConfig`. TVC normalization and servo output are fully parametric. The mixer's `fmaxf(0.0f, cos(...))` floor handles past-90° naturally — roll authority, rear motor, and elevator trim all fade to zero at 90° and stay there.
+
+**Extending the servo range — backward (braking / reverse, copter mode only):** To allow motors to tilt past vertical into a backward position:
+1. Set `avatarConfig.reverse_flight_physical_angle_deg` to a negative value matching the physical limit (e.g., `-20.0f` for 20° backward). Currently `0.0f`, which falls back to a 0.1f division guard and clamps all backward commands to `tilt_angle = -1.0` → `SERVO5_MAX` (currently = TRIM = vertical, no movement).
+2. Calibrate `SERVO5_MAX` to the PWM at the backward limit. With `SERVO5_REVERSED=1`, negative `tilt_angle` drives toward MAX via `set_output_norm`. Currently `SERVO5_MAX = SERVO5_TRIM = 1827`, which prevents any backward travel.
+3. Keep `SERVO5_TRIM` at the physical vertical position — this is the invariant that the whole normalization depends on.
+
+**Negative tilt and `cos_tilt`:** `cos` is an even function (`cos(-x) = cos(x)`), so `cos_tilt` at -20° equals `cos_tilt` at +20° ≈ 0.94. Roll authority, rear motor, and elevator trim all behave symmetrically around vertical. The `fmaxf(0.0f, ...)` floor never activates for backward angles less than 90° — it only guards the forward-past-90° case.
+
+**Plane mode and backward tilt:** The plane mode formula `constrain_float(1.0f - pitch_tilt_demand, 0.0f, 1.0f)` has a lower bound of `0.0` — plane mode can never command negative `tilt_angle` regardless of servo range. Backward extension is copter-mode-only. See section 4.4.2 for what would need to change to enable reverse in plane mode.
 
 ### 4.7 Front Motor Pitch Mixing
 
@@ -366,6 +420,8 @@ Control surfaces (ailerons, V-tail) in QSTABILIZE receive pilot stick input dire
 
 The fix adds explicit setters `set_pilot_roll()`, `set_pilot_pitch()`, `set_pilot_yaw()` to `AP_Motors_Class`, called from `ModeQStabilize::update()` behind `#if ENABLE_TRICOPTER_VTOL_BACKEND`. The normalized stick values (-1..1) feed directly into `mixer_in.surface_roll / surface_pitch / surface_yaw`.
 
+**These are the only callers of `set_pilot_*`.** In QHOVER, QLOITER, FBWA, and all other modes, the setters are never called and `surface_roll/pitch/yaw` remains zero. Surface authority in those modes comes entirely from the copter PID outputs (`inputs.roll`, `inputs.yaw`) — not direct stick passthrough.
+
 `AP_Motors6DOF.cpp` uses:
 ```cpp
 mixer_in.surface_roll  = _pilot_roll;
@@ -401,7 +457,7 @@ mixer_in.surface_pitch = _pilot_pitch;
 - Rear yaw motor gets `inputs.yaw`
 
 **`AvatarMixer::mix()` — Plane mode:**
-- Elevator-first, then motor tilt when saturated (see section 4.4)
+- Direct tilt control via pilot pitch stick; elevator is driven by ArduPlane's fixed-wing pitch PID (see section 4.4)
 - V-tail mixing computed in mixer output stage
 
 **Surface control:** Pilot stick fed via `set_pilot_roll/pitch/yaw` setters from `ModeQStabilize::update()` (see section 4.10).
@@ -409,6 +465,8 @@ mixer_in.surface_pitch = _pilot_pitch;
 **Motor count fix** — `wantMotors` is 3 for both blimp and Avatar.
 
 **Forward input normalization** — `AVATAR_FORWARD_INPUT_MAX = 0.42f`. `Q_ANGLE_MAX = 30°` caps pilot pitch demand so `_forward_in` never reaches 1.0 at full stick. Dividing by 0.42 re-normalises full stick to 1.0 for the TVC.
+
+**Throttle channel encoding** — Avatar maps throttle to `1500..2000` (positive half only), not the full `1000..2000` range. TVC_Core always decodes THRUST_CHANNEL with `sbus_pwm_to_float(..., -1.0f, 1.0f)`, so 1500 → 0.0 and 2000 → 1.0. Using the full range would make zero stick (1000 PWM) look like full reverse thrust to the TVC's `sqrtf` magnitude calculation, producing `total_throttle = 1.0` at both extremes and incorrect tilt angles. Blimp uses the full range because its motors are genuinely bidirectional. This asymmetry is intentional and was validated during testing.
 
 ### 6.3 Not Required for T1 Ranger Test
 - Rear motor `sin(wing_angle)` formula — rear motor absent on test airframe
