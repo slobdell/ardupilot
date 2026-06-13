@@ -257,6 +257,11 @@ class VehicleInfo(object):
                 "default_params_filename": ["default_params/quadplane.parm",
                                             "default_params/quadplane-tilttri.parm"],
             },
+            "quadplane-avatar": {
+                "waf_target": "bin/arduplane",
+                "default_params_filename": ["default_params/quadplane.parm",
+                                            "default_params/quadplane-avatar.parm"],
+            },
             "quadplane-tilttrivec": {
                 "waf_target": "bin/arduplane",
                 "default_params_filename": ["default_params/quadplane.parm",
@@ -347,6 +352,13 @@ class VehicleInfo(object):
                 "waf_target": "bin/arduplane",
                 "default_params_filename": "default_params/gazebo-zephyr.parm",
                 "external": True,
+            },
+            "gazebo-avatar": {
+                "waf_target": "bin/arduplane",
+                "default_params_filename": ["default_params/quadplane.parm",
+                                            "default_params/quadplane-avatar.parm"],
+                "external": True,
+                "model": "JSON",
             },
             "last_letter": {
                 "waf_target": "bin/arduplane",

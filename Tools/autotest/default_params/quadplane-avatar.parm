@@ -1,0 +1,20 @@
+# Avatar tilt-rotor tricopter SITL defaults
+# Motors: SERVO1=left, SERVO4=right, SERVO3=rear
+# Tilt:   SERVO5=k_scripting2 (wing tilt, servo_min=1000=cruise, servo_max=2000=hover)
+# Surfaces: SERVO6=ail-L, SERVO7=ail-R, SERVO8=vtail-L, SERVO9=vtail-R
+
+SERVO1_FUNCTION     33
+SERVO2_FUNCTION      0
+SERVO3_FUNCTION     35
+SERVO4_FUNCTION     34
+SERVO5_FUNCTION     95
+SERVO5_TRIM       2000
+SERVO6_FUNCTION     96
+SERVO7_FUNCTION     97
+SERVO8_FUNCTION     98
+SERVO9_FUNCTION     99
+
+Q_TILT_ENABLE        0
+Q_FRAME_CLASS        1
+ARSPD_USE            0
+AIRSPEED_MIN         0

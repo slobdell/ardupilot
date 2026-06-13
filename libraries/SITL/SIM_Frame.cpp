@@ -255,6 +255,16 @@ static Motor tilttri_motors[] =
     Motor(AP_MOTORS_MOT_4,  180, AP_MOTORS_MATRIX_YAW_FACTOR_CCW, 2, AP_MOTORS_MOT_7, 60, -60, -1, 0, 0),
 };
 
+// Avatar tilt-rotor tricopter (motor_offset=0):
+//   SERVO1(idx 0) = left wing motor,  SERVO4(idx 3) = right wing motor
+//   SERVO3(idx 2) = rear tail motor,  SERVO5(idx 4) = shared wing tilt servo
+static Motor avatar_motors[] =
+{
+    Motor(0,  60, AP_MOTORS_MATRIX_YAW_FACTOR_CCW, 1, -1, 0, 0, 4, 0, -90),
+    Motor(3, -60, AP_MOTORS_MATRIX_YAW_FACTOR_CW,  3, -1, 0, 0, 4, 0, -90),
+    Motor(2, 180, AP_MOTORS_MATRIX_YAW_FACTOR_CCW, 2),
+};
+
 static Motor tilttri_vectored_motors[] =
 {
     Motor(AP_MOTORS_MOT_1,   60, AP_MOTORS_MATRIX_YAW_FACTOR_CCW, 1, -1, 0, 0, 7, 10, -90),
@@ -315,6 +325,7 @@ static Frame supported_frames[] =
     Frame("tri",       3, tri_motors),
     Frame("tilttrivec",3, tilttri_vectored_motors),
     Frame("tilttri",   3, tilttri_motors),
+    Frame("avatar",    3, avatar_motors),
     Frame("y6",        6, y6_motors),
     Frame("firefly",   6, firefly_motors),
     Frame("tilt",      4, tiltquad),

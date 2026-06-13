@@ -201,6 +201,10 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_CoreState& state, c
     // --- PITCH COMPENSATION ---
     // Offset the servo pitch target by the aircraft's current pitch to maintain absolute vector angle.
     // Example: If aircraft pitches up (+30 deg), servos tilt forward (+30 deg) to stay vertical.
+    //
+    // Geometrically correct: when the aircraft pitches nose-up by φ, body-Z tilts backward by φ.
+    // Adding +φ to the joint (toward cruise direction) restores world-vertical thrust:
+    //   world_thrust = [sin(θ-φ), 0, cos(θ-φ)] → vertical when θ = φ.
     target_pitch_deg += current_pitch_deg;
 
     // 5. --- RUN PID CONTROLLERS ---

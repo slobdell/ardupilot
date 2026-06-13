@@ -1,0 +1,21 @@
+description: >
+    8BitDo Ultimate 2C Wireless Controller — Mode 2 mapping.
+    Left stick: throttle (Y, inverted) + yaw (X).
+    Right stick: pitch (Y) + roll (X).
+    Analog triggers (axes 2 and 5) are ignored.
+match:
+  - '8BitDo Ultimate 2C Wireless Controller'
+controls:
+  - channel: 1
+    type: axis
+    id: 3
+  - channel: 2
+    type: axis
+    id: 4
+  - channel: 3
+    type: axis
+    id: 1
+    invert: true
+  - channel: 4
+    type: axis
+    id: 0

@@ -57,6 +57,11 @@ QuadPlane::QuadPlane(const char *frame_str) :
         frame_type = "tilttri";
         // fwd motor gives zero thrust
         thrust_scale = 0;
+    } else if (strstr(frame_str, "avatar")) {
+        frame_type = "avatar";
+        // no fixed-wing forward motor; VTOL motors occupy SERVO1/3/4 (motor_offset=0)
+        thrust_scale = 0;
+        motor_offset = 0;
     } else if (strstr(frame_str, "firefly")) {
         frame_type = "firefly";
         // elevon style surfaces
