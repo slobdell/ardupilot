@@ -62,9 +62,23 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // =====================================================================
         state.manual_override_active = false;
 
-        // Tilt: pilot pitch up (positive) rotates rotors toward vertical (tilt_angle -> 0).
-        // Pitch down has no effect since tilt_angle is clamped at 1.0 (full horizontal).
-        outputs.tilt_angle = constrain_float(1.0f - inputs.plane.pitch_tilt_demand, 0.0f, 1.0f);
+        // [AV-INVAR:plane-tilt-slew] — see Avatar_Design.md § 9
+        // Tilt: nav_pitch_cd (pilot + TECS) sets the target; state.current_tilt_deg slews toward
+        // it at an asymmetric rate — fast toward vertical (Q_TILT_RATE_UP, servo physical speed)
+        // for rapid stall recovery, slow toward horizontal (Q_TILT_RATE_DN) so the aircraft
+        // builds airspeed before wing lift is needed.
+        {
+            float target_tilt_angle = constrain_float(1.0f - inputs.plane.pitch_tilt_demand, 0.0f, 1.0f);
+            float target_tilt_deg   = target_tilt_angle * g_config.forward_flight_physical_angle_deg;
+            float rate_up = std::max(1.0f, inputs.tilt_rate_up_dps);
+            float rate_dn = std::max(1.0f, inputs.tilt_rate_down_dps > 0.0f
+                                          ? inputs.tilt_rate_down_dps
+                                          : inputs.tilt_rate_up_dps);
+            state.current_tilt_deg = constrain_float(target_tilt_deg,
+                state.current_tilt_deg - (rate_up * inputs.dt),   // toward vertical: fast
+                state.current_tilt_deg + (rate_dn * inputs.dt));  // toward horizontal: slow
+            outputs.tilt_angle = state.current_tilt_deg / g_config.forward_flight_physical_angle_deg;
+        }
 
         // Elevator: copter attitude PID output — same signal and same sign as the rear motor.
         // Both actuators cooperate to hold the fuselage level; gain may need flight tuning.
@@ -87,6 +101,14 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         float rear_demand = (throttle_pct - inputs.pitch) * cos_tilt_b;
         outputs.limit.pitch = (rear_demand > 1.0f || rear_demand < 0.0f);
         outputs.motor_thrust[AVATAR_MOT_YAW] = constrain_float(rear_demand, 0.0f, 1.0f);
+        // Yaw: pilot rudder input drives rear motor differential, fading from full authority
+        // in hover to zero in cruise (same cos_tilt_b handoff as roll).
+        // [AV-INVAR:yaw-handoff-cos-tilt] — see Avatar_Design.md § 9
+        // TODO(4th motor): when AVATAR_MOT_YAW_LEFT / AVATAR_MOT_YAW_RIGHT slots exist,
+        // replace the single AVATAR_MOT_YAW line above with:
+        //   float yaw_delta = (inputs.plane.rudder_input / 4500.0f) * cos_tilt_b;
+        //   outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_demand + yaw_delta, 0.0f, 1.0f);
+        //   outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_demand - yaw_delta, 0.0f, 1.0f);
 
 #if AVATAR_DEBUG_LOG
         {
@@ -152,7 +174,11 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         float throttle_thrust = tvc_out.total_throttle;
         outputs.debug_data = tvc_out.debug_data;
 
-        // Rate-limit tilt and scale back thrust proportionally during transient
+        // [AV-INVAR:tilt-servo-tracking] — see Avatar_Design.md § 9
+        // outputs.tilt_angle (servo command) is already set to the TVC target above.
+        // state.current_tilt_deg is a rate-limited model of where the servo physically is.
+        // Motor mixing (cos_tilt, roll authority, rear motor) and throttle scaling all use
+        // the physical position so they remain correct while the servo is still travelling.
         float tilt_rate = std::max(1.0f, inputs.tilt_rate_up_dps);
         float target_deg = tvc_out.debug_data.target_pitch_deg;
         state.current_tilt_deg = constrain_float(target_deg,
@@ -183,6 +209,13 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // vectoring so it loses relevance (and would invert without the floor) past 90°.
         float rear_thrust = (inputs.throttle - inputs.pitch) * cos_tilt;
         outputs.motor_thrust[AVATAR_MOT_YAW] = constrain_float(rear_thrust, 0.0f, 1.0f);
+        // Yaw: copter attitude PID output drives rear motor differential, fading with cos_tilt.
+        // [AV-INVAR:yaw-handoff-cos-tilt] — same handoff pattern as plane mode; see Avatar_Design.md § 9
+        // TODO(4th motor): when AVATAR_MOT_YAW_LEFT / AVATAR_MOT_YAW_RIGHT slots exist,
+        // replace the single AVATAR_MOT_YAW line above with:
+        //   float yaw_delta = inputs.yaw * cos_tilt;
+        //   outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_thrust + yaw_delta, 0.0f, 1.0f);
+        //   outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_thrust - yaw_delta, 0.0f, 1.0f);
         // Surfaces use FF-only pilot stick input for direct authority.
         // Motors use PID-derived inputs.roll/yaw for closed-loop stability.
         outputs.rudder_out   = inputs.surface_yaw;

@@ -93,6 +93,8 @@ ArduPlane's `Q_ANGLE_MAX` (e.g., 30°) caps the pilot pitch demand fed into the 
 
 **Throttle channel mapping (`−1..1`, not `0..1`).** Because `tricopter_is_blimp = true`, `AP_Motors6DOF::output_armed_stabilizing()` calls `get_throttle_bidirectional()` instead of `get_throttle()`. `inputs.throttle` is therefore in `−1..1`. The TVC maps this with `f2pwm(inputs.throttle, -1.0f, 1.0f)`: zero throttle → 1500 PWM (idle), full throttle → 2000, full reverse → 1000. Avatar uses unidirectional motors and maps `0..1` to `1500..2000` (positive half only) — a different encoding of the same THRUST_CHANNEL.
 
+**Tilt servo tracking — `[BL-INVAR:tilt-servo-tracking]`.** After the TVC call, `outputs.tilt_angle` is set to the TVC target immediately — the servo moves as fast as it physically can. `state.current_tilt_deg` is a separate software model of the servo's physical position, updated each loop at the rate given by `Q_TILT_RATE_UP`. Motor thrust (`throttle_thrust *= cos(error_deg)`) and elevator trim (`outputs.elevator_out = cos(state.current_tilt_deg)`) both use the model, not the target. The problem this solves: commanding forward thrust tilts the motors toward horizontal, but while the servo is still near-vertical the thrust vector is mostly upward — if the mixer used the target angle, it would compute roll and throttle for a tilt that hasn't happened yet, producing an altitude spike and wrong roll authority. The elevator trim has the same concern: jumping to the trim value for the target angle before the servo reaches it causes a transient pitch disturbance. The blimp's mechanism range is 270° (vertical up through forward cruise to vertical down for emergency descent). **`Q_TILT_RATE_UP` is a dependent variable** — it must be calibrated to the measured physical slew rate of the tilt mechanism in degrees/second of gondola travel (not servo shaft degrees, if geared). Calibration: command a full-range tilt, measure seconds, set `Q_TILT_RATE_UP = range_deg / seconds`. The identical mechanism exists in the Avatar mixer (`[AV-INVAR:tilt-servo-tracking]`), where the range is 90° and the correct value will be proportionally different.
+
 **Throttle suppression bypass.** `QuadPlane::update_throttle_suppression()` returns immediately for blimp:
 ```cpp
 if (g_config.tricopter_is_blimp) { return; }
@@ -199,7 +201,10 @@ SERVO15_FUNCTION = 70   (Throttle)
 Q_ENABLE = 1
 Q_FRAME_CLASS = 1   (Quad)
 Q_FRAME_TYPE = 1    (X)
+Q_TILT_RATE_UP = <measured>   (physical slew rate of tilt mechanism in deg/s — see [BL-INVAR:tilt-servo-tracking])
 ```
+
+`Q_TILT_RATE_UP` is **not a tuning knob** — it must equal the measured physical speed of the tilt gondola mechanism. Calibrate by commanding a full-range tilt and timing it: `Q_TILT_RATE_UP = 270 / seconds`. Wrong values cause altitude spikes and incorrect roll authority during tilt transients.
 
 ### ESC & DShot
 ```

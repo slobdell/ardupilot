@@ -117,8 +117,12 @@ void BlimpMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs&
         float throttle_thrust = tvc_out.total_throttle;
         outputs.debug_data = tvc_out.debug_data;
 
-        // Transient Thrust Mitigation
-        float tilt_rate = std::max(1.0f, inputs.tilt_rate_up_dps); 
+        // [BL-INVAR:tilt-servo-tracking] — see Blimp_Design.md § 2 "Non-obvious code behaviors"
+        // outputs.tilt_angle (servo command) is already set to the TVC target above.
+        // state.current_tilt_deg is a rate-limited model of where the servo physically is.
+        // Motor thrust and elevator trim both use the physical position so they remain
+        // correct while the servo is still travelling to its target.
+        float tilt_rate = std::max(1.0f, inputs.tilt_rate_up_dps);
         float target_deg = tvc_out.debug_data.target_pitch_deg;
         state.current_tilt_deg = constrain_float(target_deg, state.current_tilt_deg - (tilt_rate * inputs.dt), state.current_tilt_deg + (tilt_rate * inputs.dt));
         float error_deg = fabsf(state.current_tilt_deg - target_deg);

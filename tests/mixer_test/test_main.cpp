@@ -1285,6 +1285,221 @@ void nose_down_aircraft_front_motors_produce_more_thrust_than_rear()
 }
 
 // ============================================================================
+// GROUP J — Plane mode tilt slew rate limiting [AV-INVAR:plane-tilt-slew]
+//
+// When the pilot releases the pitch stick from wings-vertical in FBWA, the
+// tilt servo command must NOT snap instantly to wings-horizontal.  Instead,
+// state.current_tilt_deg slews toward the target at an asymmetric rate:
+//
+//   toward horizontal (increasing tilt_deg): rate_dn  (slow, safety — aircraft
+//     must build airspeed before motor lift replaces wing lift)
+//   toward vertical   (decreasing tilt_deg): rate_up  (fast, stall recovery)
+//
+// The slew gate in the mixer (Avatar plane mode):
+//   constrain_float(target_deg,
+//       current - rate_up * dt,   // lower bound — fast toward vertical
+//       current + rate_dn * dt)   // upper bound — slow toward horizontal
+//
+// Config (forward_flight_physical_angle_deg = 90°):
+//   tilt_angle = 0.0  →  wings vertical   (current_tilt_deg = 0°)
+//   tilt_angle = 1.0  →  wings horizontal (current_tilt_deg = 90°)
+//
+// Typical field values: rate_up = 120 °/s (servo physical speed, calibrated),
+//   rate_dn = 30 °/s → 90°/30 = 3-second wing-down transition.
+//
+// IMPORTANT: existing Layer-2 plane-mode tests set tilt_rate_down_dps = 0
+// (zero-initialized MixerInputs) which triggers the fallback to rate_up=1e6,
+// so every existing test still reaches the target in a single call.  These
+// tests use finite rates to exercise the actual slew path.
+// ============================================================================
+
+void plane_tilt_slew_stick_release_advances_one_step_at_rate_dn()
+{
+    // Aircraft hovering: current_tilt_deg = 0° (wings vertical).
+    // Pilot releases pitch stick: pitch_tilt_demand = 0 → target = 90°.
+    //
+    // rate_dn = 30 °/s, dt = 0.0025 s → one tick advances by:
+    //   0 + 30 × 0.0025 = 0.075°  →  tilt_angle = 0.075/90 ≈ 0.000833
+    //
+    // This is the primary stall-prevention test: wings do NOT snap to
+    // horizontal in a single mixer call.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 0.0f;   // neutral stick = wings horizontal target
+    in.tilt_rate_up_dps        = 120.0f;
+    in.tilt_rate_down_dps      = 30.0f;
+    in.dt                      = 0.0025f;
+    MixerState   state;
+    state.current_tilt_deg = 0.0f;       // wings vertical at start
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    float expected_deg  = 0.0f + 30.0f * 0.0025f;  // = 0.075°
+    float expected_tilt = expected_deg / 90.0f;
+    CHECK_NEAR(expected_tilt, out.tilt_angle,         0.0001f);
+    CHECK_NEAR(expected_deg,  state.current_tilt_deg, 0.001f);
+    end_test();
+}
+
+void plane_tilt_slew_wings_do_not_snap_to_horizontal_in_single_step()
+{
+    // Regression guard: with finite rate_dn, wings-vertical + neutral stick must
+    // produce tilt_angle far below 1.0 after one call.  If this fails with
+    // tilt_angle ≈ 1.0, rate limiting has been removed or bypassed.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 0.0f;
+    in.tilt_rate_up_dps        = 120.0f;
+    in.tilt_rate_down_dps      = 30.0f;
+    in.dt                      = 0.0025f;
+    MixerState   state;
+    state.current_tilt_deg = 0.0f;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_TRUE(out.tilt_angle < 0.01f); // nowhere near horizontal (1.0) after one tick
+    end_test();
+}
+
+void plane_tilt_slew_toward_vertical_uses_rate_up_not_rate_dn()
+{
+    // Stall recovery: wings at 90° (horizontal), pilot demands full pitch up.
+    // Moving toward vertical = decreasing tilt_deg = rate_up path.
+    //
+    // rate_up = 120 °/s, rate_dn = 30 °/s, dt = 0.5 s:
+    //   lower bound = 90 − 120×0.5 = 30°   (rate_up — fast)
+    //   upper bound = 90 + 30×0.5  = 105°  (rate_dn — slow, not the active path)
+    //   target = 0° < 30° → result = 30° → tilt_angle = 30/90 ≈ 0.333
+    //
+    // If rate_dn (30 °/s) were used for both directions:
+    //   lower bound = 90 − 30×0.5 = 75° → result = 75° → tilt_angle = 0.833.
+    // The two scenarios give completely different values — this test catches a
+    // rate_up / rate_dn swap in the constrain_float arguments.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 1.0f;   // full pitch up → target tilt_deg = 0°
+    in.tilt_rate_up_dps        = 120.0f;
+    in.tilt_rate_down_dps      = 30.0f;
+    in.dt                      = 0.5f;
+    MixerState   state;
+    state.current_tilt_deg = 90.0f;     // wings horizontal
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    float expected_deg  = 90.0f - 120.0f * 0.5f; // = 30°
+    float expected_tilt = expected_deg / 90.0f;   // ≈ 0.333
+    CHECK_NEAR(expected_tilt, out.tilt_angle,         0.001f);
+    CHECK_NEAR(expected_deg,  state.current_tilt_deg, 0.001f);
+    end_test();
+}
+
+void plane_tilt_slew_rate_dn_zero_falls_back_to_rate_up()
+{
+    // rate_dn = 0 is the sentinel meaning "use rate_up for both directions."
+    // This matches Q_TILT_RATE_DN = 0 (the param default before Avatar tuning).
+    //
+    // rate_up = 60 °/s, rate_dn = 0 → fallback = 60 °/s, dt = 0.5 s:
+    //   upper bound = 0 + 60×0.5 = 30°  (fallback applies rate_up to dn path)
+    //   target = 90° > 30° → result = 30° → tilt_angle = 30/90 ≈ 0.333
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 0.0f;   // target = 90° (horizontal)
+    in.tilt_rate_up_dps        = 60.0f;
+    in.tilt_rate_down_dps      = 0.0f;   // sentinel: fall back to rate_up
+    in.dt                      = 0.5f;
+    MixerState   state;
+    state.current_tilt_deg = 0.0f;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    float expected_deg  = 0.0f + 60.0f * 0.5f;  // = 30° (fallback to rate_up)
+    float expected_tilt = expected_deg / 90.0f;  // ≈ 0.333
+    CHECK_NEAR(expected_tilt, out.tilt_angle, 0.001f);
+    end_test();
+}
+
+void plane_tilt_slew_state_persists_across_calls_accumulates_two_steps()
+{
+    // state.current_tilt_deg carries over between mix() calls.
+    // After call 1: current = 0 + rate_dn × dt = 0.075°
+    // After call 2: current = 0.075 + rate_dn × dt = 0.150°
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 0.0f;
+    in.tilt_rate_up_dps        = 120.0f;
+    in.tilt_rate_down_dps      = 30.0f;
+    in.dt                      = 0.0025f;
+    MixerState   state;
+    state.current_tilt_deg = 0.0f;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    mixer.mix(in, state, out);
+    float expected_deg  = 2.0f * 30.0f * 0.0025f;  // = 0.150°
+    float expected_tilt = expected_deg / 90.0f;
+    CHECK_NEAR(expected_tilt, out.tilt_angle,         0.0001f);
+    CHECK_NEAR(expected_deg,  state.current_tilt_deg, 0.001f);
+    end_test();
+}
+
+void plane_tilt_slew_full_3_second_transition_vertical_to_horizontal()
+{
+    // Integrative test: wings-vertical → stick release → run 3 s at 400 Hz
+    // (1200 ticks).  rate_dn = 30 °/s: 30 × 3 = 90° → tilt_angle = 1.0.
+    // One extra tick confirms the slew saturates at the target (no overshoot).
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 0.0f;   // neutral stick = horizontal target
+    in.tilt_rate_up_dps        = 120.0f;
+    in.tilt_rate_down_dps      = 30.0f;
+    in.dt                      = 0.0025f; // 400 Hz
+    MixerState   state;
+    state.current_tilt_deg = 0.0f;
+    MixerOutputs out;
+    for (int i = 0; i < 1200; i++) { // 3 s × 400 Hz
+        mixer.mix(in, state, out);
+    }
+    CHECK_NEAR(1.0f, out.tilt_angle, 0.001f); // reached wings-horizontal
+    mixer.mix(in, state, out);                 // one extra tick — no overshoot
+    CHECK_NEAR(1.0f, out.tilt_angle, 0.001f);
+    end_test();
+}
+
+void plane_tilt_slew_cos_tilt_computed_from_rate_limited_angle_not_target()
+{
+    // Motor outputs use cos(current_tilt_deg), not cos(target_tilt_deg).
+    // With slew active the two differ significantly.
+    //
+    // Start: current_tilt_deg = 0°, target = 90°, rate_dn = 30 °/s, dt = 0.5 s.
+    // After one step: current_tilt_deg = 0 + 30×0.5 = 15°, cos(15°) ≈ 0.966.
+    //   rear = (throttle - pitch) × cos(15°) = 0.5 × 0.966 ≈ 0.483
+    //
+    // If cos used the target angle (90°):
+    //   rear = 0.5 × cos(90°) = 0.5 × 0 = 0.0  — completely wrong.
+    //
+    // The 0.483 vs 0.0 delta confirms the physical tilt model drives actuators.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 0.0f;   // target = 90° (horizontal)
+    in.plane.throttle_pct      = 50.0f;
+    in.pitch                   = 0.0f;
+    in.tilt_rate_up_dps        = 120.0f;
+    in.tilt_rate_down_dps      = 30.0f;
+    in.dt                      = 0.5f;
+    MixerState   state;
+    state.current_tilt_deg = 0.0f;       // wings vertical
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    float deg_after     = 0.0f + 30.0f * 0.5f;              // = 15°
+    float expected_rear = 0.5f * std::cos(radians(deg_after)); // ≈ 0.483
+    CHECK_NEAR(expected_rear, out.motor_thrust[2], 0.002f);
+    CHECK_TRUE(out.motor_thrust[2] > 0.4f); // far from 0.0 (target-angle result)
+    end_test();
+}
+
+// ============================================================================
 // LAYER 4: BlimpMixer — PLANE MODE
 //
 // Active config: forward_flight_physical_angle_deg = 90°, handoff_point = 0.5
@@ -1515,6 +1730,15 @@ int main()
     std::printf("\n-- Group I: Aircraft pitch state -> motor hierarchy --\n");
     nose_up_aircraft_rear_motor_produces_more_thrust_than_front();
     nose_down_aircraft_front_motors_produce_more_thrust_than_rear();
+
+    std::printf("\n-- Group J: Plane mode tilt slew rate limiting [AV-INVAR:plane-tilt-slew] --\n");
+    plane_tilt_slew_stick_release_advances_one_step_at_rate_dn();
+    plane_tilt_slew_wings_do_not_snap_to_horizontal_in_single_step();
+    plane_tilt_slew_toward_vertical_uses_rate_up_not_rate_dn();
+    plane_tilt_slew_rate_dn_zero_falls_back_to_rate_up();
+    plane_tilt_slew_state_persists_across_calls_accumulates_two_steps();
+    plane_tilt_slew_full_3_second_transition_vertical_to_horizontal();
+    plane_tilt_slew_cos_tilt_computed_from_rate_limited_angle_not_target();
 
     std::printf("\n-- Layer 4: BlimpMixer plane mode --\n");
     blimp_plane_neutral_stick_gives_full_forward_tilt();

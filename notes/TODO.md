@@ -26,14 +26,29 @@ Rear motor contribution in plane mode (`(throttle_pct - inputs.pitch) * cos_tilt
 **Elevator gain scalar and slew rate limit**
 The elevator in plane mode is driven directly by the copter attitude PID output (`outputs.elevator_out = inputs.pitch`). If the P gain is too high, the servo may hunt continuously to null small pitch errors, risking servo burnout. After first flight, evaluate whether to add: (1) a `g_config.elevator_gain_scale` multiplier to reduce elevator authority independently of motor PID tuning, and (2) a per-loop slew rate cap (`g_config.elevator_slew_rate`) to bound how fast the servo can be commanded to move. Do not add these preemptively — observe actual servo behavior first.
 
+**Calibrate `Q_TILT_RATE_UP` against actual servo speed** *(Avatar_Design.md § 9, [AV-INVAR:tilt-servo-tracking])*
+`Q_TILT_RATE_UP = 120 °/s` in the param file is an estimate. It is a *dependent variable* — it must match the physical servo speed, not a design preference. Wrong value means copter-mode motor mixing (cos_tilt, roll authority, rear motor) and throttle scaling are computed against an inaccurate physical model during transitions.
+
+Calibration procedure:
+1. Command the tilt servo from 0° to 90° (wings vertical → horizontal) via RC override
+2. Time the travel with a stopwatch or flight log
+3. Compute: `Q_TILT_RATE_UP = 90 / measured_seconds` (°/s)
+4. Update `params/avatar_t1ranger_micoair.param` and `params/avatar_t1ranger_micoair_sitl.param`
+
+Note: in plane mode, setting `Q_TILT_RATE_UP` at or below the real servo speed guarantees math accuracy by construction (the command never races ahead of the servo). `Q_TILT_RATE_DN = 30 °/s` is independent of servo speed and does not need calibration.
+
 **Plane mode stall-prevention validation**
-The stall-prevention loop (elevator saturates → wings tilt upward via TVC pitch compensation) is theoretically sound and bench-verified, but the transition boundary behavior is untested. This is the highest-uncertainty element of the Avatar design.
+The stall-prevention loop (elevator saturates → wings tilt upward via TVC pitch compensation) is theoretically sound and bench-verified, but the transition boundary behavior is untested. Tilt slew rate limiting is now implemented and unit-tested ([AV-INVAR:plane-tilt-slew]): releasing the pitch stick takes 3 seconds to reach full forward tilt. This is the highest-uncertainty element of the Avatar design in real flight.
 
 **Param hygiene**
 Current parameter files include bench-testing values. Before first flight: audit `Q_A_RAT_*` gains, `SERVO_BLH_*` DShot masks, and arming check flags. Ensure `ARMING_CHECK` is not globally disabled.
 
 **Custom runtime parameters** *(CustomParameters.md)*
-Several tuning constants in `CustomConfig` and `TVC_Core.cpp` require a recompile to change. Plan to migrate them to a proper `AP_CustomParams` subgroup in `ParametersG2`, making them adjustable from any GCS. Full implementation plan, param names, defaults, and call-site migration guide are in `CustomParameters.md`. Do this before first flight so TVC gains can be tuned without reflashing.
+Several tuning constants in `CustomConfig` and `TVC_Core.cpp` require a recompile to change. Plan to migrate them to a proper `AP_CustomParams` subgroup in `ParametersG2`, making them adjustable from any GCS. Full implementation plan, param names, defaults, and call-site migration guide are in `CustomParameters.md`.
+
+Priority params to unentangle from standard ArduPilot params:
+- `AV_TILT_SPD` — replaces `Q_TILT_RATE_UP` for copter-mode servo tracking (dependent variable, calibrated)
+- `AV_TRANS_RATE` — replaces `Q_TILT_RATE_DN` for plane-mode tilt-down slew (independent design choice, currently 30 °/s)
 
 ---
 

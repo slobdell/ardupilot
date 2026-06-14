@@ -385,11 +385,15 @@ void AP_Motors6DOF::output_armed_stabilizing()
     mixer_in.dt = _dt;
     mixer_in.spool_state = _spool_state;
     mixer_in.is_armed = armed();
-    mixer_in.tilt_rate_up_dps = 40.0f;
+    mixer_in.tilt_rate_up_dps   = 40.0f;
+    mixer_in.tilt_rate_down_dps = 0.0f;
 
 #if ENABLE_TRICOPTER_VTOL_BACKEND
     QuadPlane *qp = QuadPlane::get_singleton();
-    if (qp != nullptr) mixer_in.tilt_rate_up_dps = (float)qp->tiltrotor.max_rate_up_dps;
+    if (qp != nullptr) {
+        mixer_in.tilt_rate_up_dps   = (float)qp->tiltrotor.max_rate_up_dps;
+        mixer_in.tilt_rate_down_dps = (float)qp->tiltrotor.max_rate_down_dps;
+    }
 #endif
 
     const AP_AHRS &ahrs = AP::ahrs();

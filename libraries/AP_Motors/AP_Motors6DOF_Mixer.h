@@ -67,7 +67,8 @@ struct MixerInputs {
     float dt;
     AP_Motors::SpoolState spool_state;
     bool is_armed;
-    float tilt_rate_up_dps;
+    float tilt_rate_up_dps;   // physical servo slew rate — calibrated to hardware (see [AV-INVAR:tilt-servo-tracking])
+    float tilt_rate_down_dps; // commanded transition rate toward horizontal — design choice (see [AV-INVAR:plane-tilt-slew]); 0 = use tilt_rate_up_dps
     
     // Sensor Perception
     bool ahrs_healthy;

@@ -29,6 +29,17 @@ This is "Approach D" from the parameter system investigation. The pattern exactl
 | `AV_MAX_ANG` | `platform_max_angle_deg` | `90.0` | Maximum platform angle used to normalize TVC output. Calibration-dependent. |
 | `AV_CRZ_ANG` | *(future field)* | `90.0` | Cruise angle for past-horizontal tilt feature. Not yet a `CustomConfig` field — add this param at the same time the past-horizontal tilt feature is implemented. |
 
+### Tilt Mechanism Calibration (both platforms)
+
+Currently these reuse stock ArduPlane `Q_TILT_RATE_UP` / `Q_TILT_RATE_DN`. Those params have a different primary purpose in the standard ArduPlane tiltrotor code path (rate-limiting the servo command for transition safety). Our use is semantically different — `Q_TILT_RATE_UP` is a hardware calibration value and `Q_TILT_RATE_DN` is an independent design choice for how fast we allow the transition. Using stock params conflates the two and makes the intent invisible to anyone reading the param file.
+
+| Param name | Currently | Default | Notes |
+|---|---|---|---|
+| `AV_TILT_SPD` | `Q_TILT_RATE_UP` | `<measured>` | Physical slew rate of the tilt mechanism in deg/s. **Dependent variable** — must be measured from hardware, not chosen. Calibrate: command full-range tilt, time it, set `range_deg / seconds`. Avatar range = 90°, blimp range = 270°. See `[AV-INVAR:tilt-servo-tracking]` / `[BL-INVAR:tilt-servo-tracking]`. |
+| `AV_TRANS_RATE` | `Q_TILT_RATE_DN` | `30.0` | Rate at which the plane-mode tilt command is allowed to change toward horizontal (deg/s). **Independent design choice** — controls how slowly the wings tilt forward during hover→cruise transition, giving the aircraft time to build airspeed. See `[AV-INVAR:plane-tilt-slew]`. Blimp does not use this — blimp plane mode does not have commanded tilt slewing. |
+
+Until these custom params are implemented, `Q_TILT_RATE_UP` carries the servo calibration value and `Q_TILT_RATE_DN` carries the transition rate. They must not be set to the same value — `AV_TILT_SPD` (servo speed) will generally be much faster than `AV_TRANS_RATE` (3–5 second transition goal).
+
 ### Blimp Tuning
 
 | Param name | `CustomConfig` field | Default | Notes |
@@ -86,6 +97,10 @@ public:
     AP_Float max_angle;
     AP_Float crz_angle;
 
+    // Tilt mechanism calibration / transition rate
+    AP_Float tilt_spd;      // physical servo slew rate (hardware calibration)
+    AP_Float trans_rate;    // plane-mode commanded transition rate (design choice)
+
     // Blimp tuning
     AP_Float elev_handoff;
 
@@ -106,11 +121,13 @@ public:
 #include "AP_CustomParams.h"
 
 const AP_Param::GroupInfo AP_CustomParams::var_info[] = {
-    AP_GROUPINFO("FWD_ANG",  1, AP_CustomParams, fwd_angle,   90.0f),
-    AP_GROUPINFO("REV_ANG",  2, AP_CustomParams, rev_angle,    0.0f),
-    AP_GROUPINFO("MAX_ANG",  3, AP_CustomParams, max_angle,   90.0f),
-    AP_GROUPINFO("CRZ_ANG",  4, AP_CustomParams, crz_angle,   90.0f),
-    AP_GROUPINFO("ELEV_HO",  5, AP_CustomParams, elev_handoff, 0.5f),
+    AP_GROUPINFO("FWD_ANG",   1, AP_CustomParams, fwd_angle,    90.0f),
+    AP_GROUPINFO("REV_ANG",   2, AP_CustomParams, rev_angle,     0.0f),
+    AP_GROUPINFO("MAX_ANG",   3, AP_CustomParams, max_angle,    90.0f),
+    AP_GROUPINFO("CRZ_ANG",   4, AP_CustomParams, crz_angle,    90.0f),
+    AP_GROUPINFO("ELEV_HO",   5, AP_CustomParams, elev_handoff,  0.5f),
+    AP_GROUPINFO("TILT_SPD",  14, AP_CustomParams, tilt_spd,    40.0f),  // replace Q_TILT_RATE_UP
+    AP_GROUPINFO("TRANS_RATE",15, AP_CustomParams, trans_rate,  30.0f),  // replace Q_TILT_RATE_DN
     AP_GROUPINFO("TC_RLL_P", 6, AP_CustomParams, tc_rll_p,  <default>),
     AP_GROUPINFO("TC_PCH_P", 7, AP_CustomParams, tc_pch_p,  <default>),
     AP_GROUPINFO("TC_RP_P",  8, AP_CustomParams, tc_rp_p,   <default>),
