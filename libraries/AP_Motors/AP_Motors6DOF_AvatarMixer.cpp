@@ -1,10 +1,16 @@
+#ifndef MIXER_STANDALONE_BUILD
 #include "AP_Motors6DOF.h"
+#else
 #include "AP_Motors6DOF_AvatarMixer.h"
+#endif
 #include <AP_HAL/AP_HAL.h>
 
 // Set to 1 to enable periodic debug logging via MAVLink text messages.
 // Logs once every 3 seconds. Disable before production flights.
+// Override with -DAVATAR_DEBUG_LOG=0 on the compiler command line to suppress.
+#ifndef AVATAR_DEBUG_LOG
 #define AVATAR_DEBUG_LOG 1
+#endif
 
 #if AVATAR_DEBUG_LOG
 #include <GCS_MAVLink/GCS.h>
@@ -27,11 +33,13 @@ const float AVATAR_FORWARD_INPUT_MAX = 0.42f;
 
 void AvatarMixer::setup_motors(::AP_Motors6DOF* backend)
 {
+#ifndef MIXER_STANDALONE_BUILD
     const float yawFactor = 1.0f;
     const float noInput   = 0.0f;
     backend->add_motor_raw_6dof(AP_MOTORS_MOT_1, noInput, noInput, noInput, 1.0f, noInput, noInput, 1);
     backend->add_motor_raw_6dof(AP_MOTORS_MOT_2, noInput, noInput, noInput, 1.0f, noInput, noInput, 2);
     backend->add_motor_raw_6dof(AP_MOTORS_MOT_3, noInput, noInput, yawFactor, 0.0f, noInput, noInput, 3);
+#endif
 }
 
 void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs& outputs)

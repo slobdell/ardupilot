@@ -29,6 +29,9 @@ The stall-prevention loop (elevator saturates → wings tilt upward via TVC pitc
 **Param hygiene**
 Current parameter files include bench-testing values. Before first flight: audit `Q_A_RAT_*` gains, `SERVO_BLH_*` DShot masks, and arming check flags. Ensure `ARMING_CHECK` is not globally disabled.
 
+**Custom runtime parameters** *(CustomParameters.md)*
+Several tuning constants in `CustomConfig` and `TVC_Core.cpp` require a recompile to change. Plan to migrate them to a proper `AP_CustomParams` subgroup in `ParametersG2`, making them adjustable from any GCS. Full implementation plan, param names, defaults, and call-site migration guide are in `CustomParameters.md`. Do this before first flight so TVC gains can be tuned without reflashing.
+
 ---
 
 ## Blimp — Needs Aircraft / Helium

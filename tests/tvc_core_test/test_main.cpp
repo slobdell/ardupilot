@@ -243,8 +243,8 @@ void zero_thrust_with_full_forward_stick_tilts_to_exactly_horizontal()
 
     TVC_Outputs out = tvc_run_main_logic(in, core, tvc_config);
 
-    // atan2(1.0, 0.0) = 90° → 90° / 180° (blimp) = 0.5
-    CHECK_NEAR(0.5f, out.pitch_angle_norm, 0.01f);
+    // atan2(1.0, 0.0) = 90° → 90° / 90° (avatar) = 1.0
+    CHECK_NEAR(1.0f, out.pitch_angle_norm, 0.01f);
     end_test();
 }
 
@@ -321,9 +321,9 @@ void aircraft_pitching_up_shifts_wing_tilt_to_maintain_absolute_thrust_direction
     // tilts the wings toward vertical to restore lift — no discrete mode switch.
     //
     // At forward=0.5, thrust=0.5, level aircraft:
-    //   target = atan2(0.5, 0.5) = 45°  →  normalised = 45/180 ≈ 0.25
+    //   target = atan2(0.5, 0.5) = 45°  →  normalised = 45/90 = 0.5
     // Same stick inputs, aircraft pitched up 20°:
-    //   target = 45° + 20° = 65°  →  normalised = 65/180 ≈ 0.361
+    //   target = 45° + 20° = 65°  →  normalised = 65/90 ≈ 0.722
     begin_test(__func__);
 
     TVCTestState state_level;
@@ -340,7 +340,7 @@ void aircraft_pitching_up_shifts_wing_tilt_to_maintain_absolute_thrust_direction
     TVC_Outputs out_pitched = tvc_run_main_logic(in, core_pitched, tvc_config);
 
     CHECK_TRUE(out_pitched.pitch_angle_norm > out_level.pitch_angle_norm);
-    CHECK_NEAR(0.361f, out_pitched.pitch_angle_norm, 0.01f); // 65° / 180°
+    CHECK_NEAR(0.722f, out_pitched.pitch_angle_norm, 0.01f); // 65° / 90°
 
     end_test();
 }
@@ -438,7 +438,7 @@ void zero_transition_progress_uses_pure_hover_tvc_calculation()
 {
     // At transition = 0.0 (hover), the forward-flight model has zero weight.
     // The output is purely what the atan2 calculation produces from the sticks.
-    // At forward=0.5, thrust=0.5, level: atan2(0.5, 0.5) = 45° → 45/180 = 0.25.
+    // At forward=0.5, thrust=0.5, level: atan2(0.5, 0.5) = 45° → 45/90 = 0.5.
     begin_test(__func__);
 
     TVCTestState state;
@@ -449,15 +449,15 @@ void zero_transition_progress_uses_pure_hover_tvc_calculation()
 
     TVC_Outputs out = tvc_run_main_logic(in, core, tvc_config);
 
-    CHECK_NEAR(0.25f, out.pitch_angle_norm, 0.01f); // 45° / 180° (blimp config)
+    CHECK_NEAR(0.5f, out.pitch_angle_norm, 0.01f); // 45° / 90° (avatar config)
     end_test();
 }
 
 void partial_transition_interpolates_between_hover_and_forward_flight_angle()
 {
     // At 50% transition the output is the weighted average of the hover model
-    // (0.25) and the forward-flight model (1.0):
-    //   0.5 * 0.25  +  0.5 * 1.0  =  0.625
+    // (0.5) and the forward-flight model (1.0):
+    //   0.5 * 0.5  +  0.5 * 1.0  =  0.75
     // This provides a smooth mechanical transition with no discontinuities.
     begin_test(__func__);
 
@@ -469,7 +469,7 @@ void partial_transition_interpolates_between_hover_and_forward_flight_angle()
 
     TVC_Outputs out = tvc_run_main_logic(in, core, tvc_config);
 
-    CHECK_NEAR(0.625f, out.pitch_angle_norm, 0.01f);
+    CHECK_NEAR(0.75f, out.pitch_angle_norm, 0.01f);
     end_test();
 }
 
@@ -543,9 +543,9 @@ int main()
 {
     std::printf("=== TVC Core Unit Tests ===\n");
     std::printf("Production files: TVC_Core.cpp, TVC_PID.cpp, TVC_Filters.cpp\n");
-    std::printf("Active config:    g_config = blimpConfig (ACTIVE_CONFIG = 0)\n");
-    std::printf("  forward_flight_physical_angle_deg = 180 (blimp)\n");
-    std::printf("  Avatar would use 90 — numeric expectations change proportionally\n");
+    std::printf("Active config:    g_config = avatarConfig (ACTIVE_CONFIG = 1)\n");
+    std::printf("  forward_flight_physical_angle_deg = 90 (avatar)\n");
+    std::printf("  Blimp would use 180 — numeric expectations scale proportionally\n");
     std::printf("Active modes:     VTOL_MODE=true  OPEN_LOOP_SERVO_MODE=true\n");
 
     neutral_sticks_in_hover_produce_zero_tilt_and_half_throttle();

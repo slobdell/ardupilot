@@ -1,7 +1,30 @@
 #pragma once
 
+#ifdef MIXER_STANDALONE_BUILD
+// Minimal standalone types — no ArduPilot library chain required.
+// Pulled in only when compiling tests/mixer_test/ outside the normal waf build.
+#include <cmath>
+#include <cstdint>
+#include <algorithm>
+
+#define AP_MOTORS_MAX_NUM_MOTORS 12
+
+namespace AP_Motors {
+    enum class SpoolState : uint8_t {
+        SHUT_DOWN = 0, GROUND_IDLE = 1, SPOOLING_UP = 2, THROTTLE_UNLIMITED = 3, SPOOLING_DOWN = 4
+    };
+}
+
+struct Vector3f { float x, y, z; };
+
+static inline float constrain_float(float x, float lo, float hi) { return x < lo ? lo : x > hi ? hi : x; }
+static inline float radians(float deg) { return deg * (float)(M_PI / 180.0); }
+static inline float degrees(float rad) { return rad * (float)(180.0 / M_PI); }
+#else
 #include "AP_Motors_Class.h"
 #include <AP_Math/AP_Math.h>
+#endif
+
 #include <AP_CustomConfig/AP_CustomConfig.h>
 #include "TVC_Core.h"
 #include "TVC_PID.h"

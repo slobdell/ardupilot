@@ -63,6 +63,11 @@ Running Avatar in ArduPilot's built-in SITL (no Gazebo required). Custom frame s
 **[QGroundControl_Setup.md](QGroundControl_Setup.md)**
 QGC installation on Ubuntu 24.04. App image location, USB permissions (`newgrp dialout`), declining firmware update prompts on custom firmware, port conflict with MAVLink scripts.
 
+### Testing
+
+**[Testing_Strategy.md](Testing_Strategy.md)**
+Unit testing philosophy and reference for `tests/mixer_test/` and `tests/tvc_core_test/`. Covers the `MIXER_STANDALONE_BUILD` isolation pattern (and why it is transparent to production), how to run tests (`make run`), and a full description of every test group (A–I, Layers 1–5). **Start here before adding new mixer tests or asking whether a specific behavior is validated.**
+
 ### Outstanding Work
 
 **[TODO.md](TODO.md)**

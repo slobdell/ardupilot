@@ -1,10 +1,12 @@
+#ifndef MIXER_STANDALONE_BUILD
 #include "AP_Motors6DOF.h"
-#include "AP_Motors6DOF_BlimpMixer.h"
 #include <SRV_Channel/SRV_Channel.h>
 #include <AP_AHRS/AP_AHRS.h>
+#endif
+#include "AP_Motors6DOF_BlimpMixer.h"
 #include <AP_HAL/AP_HAL.h>
 
-#if ENABLE_TRICOPTER_VTOL_BACKEND
+#if ENABLE_TRICOPTER_VTOL_BACKEND && !defined(MIXER_STANDALONE_BUILD)
 #include <../ArduPlane/quadplane.h>
 #endif
 
@@ -26,11 +28,13 @@ const float MANUAL_YAW_DEADBAND = 0.05f;
 
 void BlimpMixer::setup_motors(::AP_Motors6DOF* backend)
 {
+#ifndef MIXER_STANDALONE_BUILD
     const float yawFactor       =  1.0f;
     const float noInput         =  0.0f;
     backend->add_motor_raw_6dof(AP_MOTORS_MOT_1, noInput, noInput, noInput, 1.0, noInput, noInput, 1);
     backend->add_motor_raw_6dof(AP_MOTORS_MOT_2, noInput, noInput, noInput, 1.0, noInput, noInput, 2);
     backend->add_motor_raw_6dof(AP_MOTORS_MOT_3, noInput, noInput, yawFactor, 0.0, noInput, noInput, 3);
+#endif
 }
 
 void BlimpMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs& outputs)
