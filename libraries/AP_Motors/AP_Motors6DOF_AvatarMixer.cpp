@@ -1,8 +1,7 @@
 #ifndef MIXER_STANDALONE_BUILD
 #include "AP_Motors6DOF.h"
-#else
-#include "AP_Motors6DOF_AvatarMixer.h"
 #endif
+#include "AP_Motors6DOF_AvatarMixer.h"
 #include <AP_HAL/AP_HAL.h>
 
 // Set to 1 to enable periodic debug logging via MAVLink text messages.
@@ -67,20 +66,24 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // Pitch down has no effect since tilt_angle is clamped at 1.0 (full horizontal).
         outputs.tilt_angle = constrain_float(1.0f - inputs.plane.pitch_tilt_demand, 0.0f, 1.0f);
 
-        // Elevator: pure attitude error output from the plane pitch PID. No pilot
-        // feedforward — the integrator naturally settles at the level-holding position.
-        outputs.elevator_out = inputs.plane.elevator_input / 4500.0f;
+        // Elevator: copter attitude PID output — same signal and same sign as the rear motor.
+        // Both actuators cooperate to hold the fuselage level; gain may need flight tuning.
+        // [AV-INVAR:elevator-follows-pitch-pid] — see Avatar_Design.md § 9
+        outputs.elevator_out = inputs.pitch;
 
         float throttle_pct = inputs.plane.throttle_pct * 0.01f;
-        outputs.motor_thrust[AVATAR_MOT_WING_LEFT] = outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = throttle_pct;
-        outputs.rudder_out   = inputs.plane.rudder_input / 4500.0f;
-        outputs.aileron_out  = -inputs.plane.aileron_input / 4500.0f;
-        // Rear motor: closed-loop pitch from copter attitude controller, scaled by cos(tilt).
-        // cos(tilt) = 1 at hover (full authority), 0 at wings-horizontal (no authority).
-        // inputs.pitch is live in plane mode because hold_stabilize() runs before motors_output().
-        // cos factor also prevents PID windup from firing when wings are horizontal.
+        // cos(tilt): 1 at wings-vertical (hover), 0 at wings-horizontal (cruise).
+        // Scales both motor roll differential and rear motor — authority fades as
+        // aerodynamic surfaces (ailerons, elevator) take over through the transition.
         float tilt_deg_b = outputs.tilt_angle * g_config.forward_flight_physical_angle_deg;
         float cos_tilt_b = fmaxf(0.0f, cosf(radians(tilt_deg_b)));
+        // Roll: copter attitude controller differential, same input and tuning as copter mode.
+        // Fades to zero at wings-horizontal where aileron authority is full.
+        float roll_delta = inputs.roll * cos_tilt_b;
+        outputs.motor_thrust[AVATAR_MOT_WING_LEFT]  = throttle_pct + roll_delta;
+        outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = throttle_pct - roll_delta;
+        outputs.rudder_out   = inputs.plane.rudder_input / 4500.0f;
+        outputs.aileron_out  = -inputs.plane.aileron_input / 4500.0f;
         float rear_demand = (throttle_pct - inputs.pitch) * cos_tilt_b;
         outputs.limit.pitch = (rear_demand > 1.0f || rear_demand < 0.0f);
         outputs.motor_thrust[AVATAR_MOT_YAW] = constrain_float(rear_demand, 0.0f, 1.0f);

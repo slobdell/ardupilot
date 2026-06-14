@@ -29,9 +29,7 @@ float Plane::calc_speed_scaler(void)
         if (quadplane.in_vtol_mode() && arming.is_armed_and_safety_off()) {
             // when in VTOL modes limit surface movement at low speed to prevent instability
 #if ENABLE_TRICOPTER_VTOL_BACKEND && (ACTIVE_CONFIG == CONFIG_TYPE_AVATAR)
-            // ARSPD_FBW_MIN is 0 for Avatar (zero-stall-speed aircraft), so the airspeed
-            // threshold would always be 0 and never fire. Gate on tilt angle instead:
-            // surfaces are aerodynamically ineffective when rotors are near-vertical.
+            // [AV-INVAR:surface-i-decay-tilt45] — see Avatar_Design.md § 9
             const float tilt_deg = ((AP_Motors6DOF*)quadplane.motors)->get_tilt_deg();
             if (tilt_deg < 45.0f) {
                 rollController.decay_I();

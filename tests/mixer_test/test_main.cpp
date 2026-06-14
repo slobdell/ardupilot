@@ -254,15 +254,16 @@ void avatar_plane_tilt_demand_past_vertical_is_clamped()
 
 void avatar_plane_elevator_follows_pitch_pid_output()
 {
-    // elevator_out = elevator_input / 4500.  Full deflection → ±1.0.
+    // Elevator is driven by inputs.pitch (copter attitude PID), same signal as the rear motor.
+    // elevator_out == inputs.pitch directly — both actuators cooperate to hold fuselage level.
     begin_test(__func__);
     AvatarMixer  mixer;
     MixerInputs  in = neutral_plane_inputs();
-    in.plane.elevator_input = 4500.0f;
+    in.pitch = 0.3f;
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(1.0f, out.elevator_out, 0.001f);
+    CHECK_NEAR(0.3f, out.elevator_out, 0.001f);
     end_test();
 }
 
@@ -279,18 +280,56 @@ void avatar_plane_rudder_follows_pilot_yaw()
     end_test();
 }
 
-void avatar_plane_throttle_drives_wing_motors_equally()
+void avatar_plane_zero_roll_wing_motors_equal()
 {
-    // throttle_pct = 50 → motor_thrust[LEFT] = motor_thrust[RIGHT] = 0.5
+    // With zero roll input, both wing motors get equal throttle regardless of tilt.
     begin_test(__func__);
     AvatarMixer  mixer;
     MixerInputs  in = neutral_plane_inputs();
     in.plane.throttle_pct = 50.0f;
+    in.roll = 0.0f;
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
     CHECK_NEAR(0.5f, out.motor_thrust[0], 0.001f); // wing left
     CHECK_NEAR(0.5f, out.motor_thrust[1], 0.001f); // wing right
+    end_test();
+}
+
+void avatar_plane_roll_differential_applied_at_wings_vertical()
+{
+    // With wings vertical (pitch_tilt_demand=1.0, tilt_angle=0, cos_tilt=1),
+    // roll differential from the copter attitude controller is at full authority.
+    // positive inputs.roll → left motor higher, right motor lower.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.throttle_pct      = 50.0f;
+    in.plane.pitch_tilt_demand = 1.0f; // wings vertical
+    in.roll                    = 0.2f;
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(0.7f, out.motor_thrust[0], 0.001f); // left  = 0.5 + 0.2
+    CHECK_NEAR(0.3f, out.motor_thrust[1], 0.001f); // right = 0.5 - 0.2
+    end_test();
+}
+
+void avatar_plane_roll_differential_fades_at_wings_horizontal()
+{
+    // With wings horizontal (pitch_tilt_demand=0, tilt_angle=1, cos_tilt≈0),
+    // motor roll differential is zero — ailerons carry all roll authority.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.throttle_pct      = 50.0f;
+    in.plane.pitch_tilt_demand = 0.0f; // wings horizontal
+    in.roll                    = 0.5f; // significant roll demand
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(0.5f, out.motor_thrust[0], 0.001f); // left  = 0.5 (no differential)
+    CHECK_NEAR(0.5f, out.motor_thrust[1], 0.001f); // right = 0.5 (no differential)
     end_test();
 }
 
@@ -1419,7 +1458,9 @@ int main()
     avatar_plane_tilt_demand_past_vertical_is_clamped();
     avatar_plane_elevator_follows_pitch_pid_output();
     avatar_plane_rudder_follows_pilot_yaw();
-    avatar_plane_throttle_drives_wing_motors_equally();
+    avatar_plane_zero_roll_wing_motors_equal();
+    avatar_plane_roll_differential_applied_at_wings_vertical();
+    avatar_plane_roll_differential_fades_at_wings_horizontal();
     avatar_plane_wings_horizontal_rear_motor_is_zero();
     avatar_plane_wings_vertical_rear_motor_driven_by_throttle_minus_pitch();
 

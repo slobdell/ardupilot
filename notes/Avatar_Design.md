@@ -622,3 +622,93 @@ Payload varies between missions. This affects the mixing curve asymmetrically:
 - **Motor angle schedule is weight-dependent** — heavier payload increases vertical thrust requirement at every airspeed, shifting the motor angle curve upward (motors stay more vertical for longer before tilting forward).
 
 The flight controller must therefore be weight-aware to execute the correct motor schedule. This can be achieved via explicit payload weight input before flight or via in-flight weight estimation from the relationship between throttle and observed climb/sink rate.
+
+---
+
+## 9. Design Invariants
+
+These are non-obvious decisions that look wrong without context and are therefore the most likely to be "fixed" incorrectly during future development or flight-test iteration. Each carries a tag of the form `[AV-INVAR:<slug>]`. Search that exact string across both the codebase and this document to find every location where the invariant is enforced.
+
+---
+
+### [AV-INVAR:cos-tilt-i-zero]
+
+**What:** The copter attitude rate PID I-terms (pitch and roll) are scaled toward zero as the wings approach horizontal in FBWA plane mode. At ≤45° tilt (toward vertical, hover) I runs freely. At ≥90° (horizontal, cruise) I is zeroed. Between 45° and 90° the integrator is multiplied by a linear scale factor each loop, decaying it smoothly toward zero.
+
+**Where:** `ArduPlane/quadplane.cpp` — Avatar FBWA block (`ENABLE_TRICOPTER_VTOL_BACKEND && !tricopter_is_blimp`). `i_scale = constrain_float(1.0f - (tilt_deg - 45.0f) / 45.0f, 0.0f, 1.0f)` applied to `get_rate_pitch_pid()` and `get_rate_roll_pid()`. Convention: `tilt_deg = 0°` is wings vertical (hover), `tilt_deg = 90°` is wings horizontal (cruise).
+
+**Why:** The mixer multiplies copter PID outputs by `cos_tilt_b` before sending them to the rear motor and wing motor differential. When `cos_tilt_b = 0` (wings horizontal), motor outputs are silently gated to zero downstream of the PID. The PID does not know this — it sees a rate error and winds its I-term trying to achieve the commanded rate. When `cos_tilt_b` becomes non-zero again (wings tilt back toward vertical), the wound-up I-term fires a sudden pulse through the motors. The `outputs.limit.pitch` anti-windup flag does not cover this case because it only fires when motor demand exceeds `[0, 1]`, not when gated to zero by `cos_tilt_b`. Allowing I to accumulate freely in hover (≤45°) provides steady-state correction for CG offset, motor imbalance, and crosswind. Decaying it proportionally through the transition prevents the windup-then-sudden-activation failure mode.
+
+**Do not switch to unconditional I accumulation** without also adding a cos_tilt-aware anti-windup path. The `outputs.limit` flags are insufficient alone because they do not gate on `cos_tilt_b`.
+
+---
+
+### [AV-INVAR:surface-i-decay-tilt45]
+
+**What:** The fixed-wing surface controllers (roll, pitch, yaw) have their I-terms decayed via `decay_I()` when `tilt_deg < 45°`.
+
+**Where:** `ArduPlane/Attitude.cpp` — Avatar-specific block replacing the standard airspeed-threshold I-decay.
+
+**Why:** The standard ArduPlane code decays surface I-terms when airspeed drops below `ARSPD_FBW_MIN * 0.5`. Avatar sets `ARSPD_FBW_MIN = 0` (zero-stall-speed aircraft), making that threshold permanently zero — the block never fires. The 45° tilt angle is used as a proxy: when the rotors are more than halfway toward vertical, airspeed is typically near zero and the control surfaces are aerodynamically ineffective. Allowing I-terms to accumulate when surfaces produce no force would cause a windup spike when the aircraft transitions back to forward flight. Same category of problem as `[AV-INVAR:cos-tilt-i-zero]`, different controller.
+
+**The 45° threshold is a proxy, not a physical constant.** The real condition is "surfaces are aerodynamically ineffective." If the aircraft gains meaningful airspeed at tilt angles below 45° during flight testing, this threshold may need adjustment.
+
+---
+
+### [AV-INVAR:ang-vel-pitch-bypass]
+
+**What:** In FBWA plane mode, `_ang_vel_body.y` (pitch rate target) is written directly via `rate_bf_pitch_target()` rather than going through the angle controller (`attitude_controller_run_quat()`).
+
+**Where:** `ArduPlane/quadplane.cpp` — Avatar FBWA block. `AC_AttitudeControl/AC_AttitudeControl.h` — `rate_bf_pitch_target()` setter.
+
+**Why:** The angle controller maintains an `_attitude_target` quaternion that slews toward the commanded angle. In a prior FBWA transition with full pitch-up stick, `_attitude_target` can be set to `nav_pitch_cd ≈ 90°`. Even after commanding 0°, `_attitude_target` slews back slowly — `_ang_vel_body.y` (the rate target fed to the rate PID) remains large and positive for many seconds, producing wrong-sign `inputs.pitch`. Writing directly to `_ang_vel_body.y` bypasses the slewing `_attitude_target` entirely, producing a clean `att_kP × (0° − actual_pitch)` signal every loop. See § 4.4.1 for full diagnosis.
+
+---
+
+### [AV-INVAR:ang-vel-roll-tracking]
+
+**What:** In FBWA plane mode, `_ang_vel_body.x` (roll rate target) is written directly via `rate_bf_roll_target()`, targeting `nav_roll_cd` (the ArduPlane commanded bank angle) rather than always targeting 0°.
+
+**Where:** `ArduPlane/quadplane.cpp` — Avatar FBWA block. `AC_AttitudeControl/AC_AttitudeControl.h` — `rate_bf_roll_target()` setter.
+
+**Why:** Without an explicit roll rate target, `_ang_vel_body.x` is stale from the last copter mode operation. The roll rate PID then fires on a meaningless target, producing noise in `inputs.roll` which the mixer applies to the wing motor differential. By targeting `nav_roll_cd`, the copter roll controller and the ArduPlane roll PID (ailerons) cooperate — both command the same bank angle. In FBWA hover `nav_roll_cd = 0°` so both target level. In banked turns, both follow the same commanded bank. The `cos_tilt_b` scaling in the mixer fades motor roll authority to zero at wings-horizontal, so there is no fighting in cruise regardless.
+
+**Targeting `nav_roll_cd` not `0°` is load-bearing.** If changed to always target 0°, the copter roll controller will fight any bank angle commanded by ArduPlane's roll PID during intermediate tilt angles.
+
+---
+
+### [AV-INVAR:tilt-follows-nav-pitch]
+
+**What:** In plane modes, `pitch_tilt_demand` is derived from `nav_pitch_cd` (normalised by `pitch_limit_max`), not from the raw pilot pitch stick.
+
+**Where:** `ArduPlane/quadplane.cpp` — PlaneInputs injection block (`ENABLE_TRICOPTER_VTOL_BACKEND`). `plane_inputs.pitch_tilt_demand = nav_pitch_cd / (pitch_limit_max * 100)`.
+
+**Why:** `nav_pitch_cd` captures both pilot intent (FBWA stick → pitch demand) and any autonomous system modifications (TECS stall recovery, navigation). Routing it to tilt means the wings tilt toward vertical when energy management demands more lift — the Avatar equivalent of a conventional aircraft pitching up. The elevator does NOT receive `nav_pitch_cd`; it is driven by `[AV-INVAR:elevator-follows-pitch-pid]` instead. The ArduPlane pitch PID still runs and computes `elevator_input`, but that output is ignored by the mixer.
+
+**Do not revert to `channel_pitch->norm_input()`** — that discards TECS's autonomous pitch demand and breaks stall prevention in plane mode.
+
+---
+
+### [AV-INVAR:elevator-follows-pitch-pid]
+
+**What:** In FBWA plane mode, `elevator_out` is driven by `inputs.pitch` (the copter attitude controller PID output), not by `inputs.plane.elevator_input` (the ArduPlane pitch PID output).
+
+**Where:** `ArduPlane/AP_Motors/AP_Motors6DOF_AvatarMixer.cpp` — plane mode block. `outputs.elevator_out = inputs.pitch`.
+
+**Why:** The elevator's job is to hold the fuselage level — the same job as the rear motor. `inputs.pitch` is generated by the copter attitude controller targeting `0° - actual_pitch` (see `[AV-INVAR:ang-vel-pitch-bypass]`). Using the same signal for both the elevator and the rear motor means both actuators cooperate on the same error signal. `inputs.plane.elevator_input` (ArduPlane pitch PID) is discarded because that PID targets `nav_pitch_cd`, which now drives tilt angle (see `[AV-INVAR:tilt-follows-nav-pitch]`) — if `elevator_input` were used, the elevator would try to pitch the nose to match the tilt demand, which is wrong.
+
+**Gain note:** `inputs.pitch` is scaled as a motor thrust fraction (typically ±0.2 for moderate errors). This may produce smaller elevator deflections than the ArduPlane PID did. Tune with a gain multiplier if elevator authority is insufficient in flight.
+
+---
+
+### [AV-INVAR:transition-skip]
+
+**What:** `transition->force_transition_complete()` is called instead of `transition->update()` in FBWA plane mode for Avatar. The Blimp calls `transition->update()` and is unaffected by this invariant.
+
+**Where:** `ArduPlane/quadplane.cpp` — Avatar FBWA block (`!g_config.tricopter_is_blimp`).
+
+**Why:** `transition->update()` calls `hold_hover()` or `hold_stabilize()`, which call `multicopter_attitude_rate_update()`, which calls `attitude_controller_run_quat()`. This corrupts `_attitude_target`, `_pd_scale`, and `_ang_vel_body` — exactly the state that `[AV-INVAR:ang-vel-pitch-bypass]` and `[AV-INVAR:ang-vel-roll-tracking]` write directly each loop. Skipping `transition->update()` is what makes those direct writes stick.
+
+**Why Blimp is exempt:** The Blimp's plane mode mixer uses `elevator_tilt_split` driven entirely by pilot stick input. It does not read `inputs.pitch` or `inputs.roll` from the attitude controller in plane mode, so `_ang_vel_body` corruption has no effect on Blimp mixer outputs. If the Blimp's plane mode is ever changed to consume `inputs.pitch` or `inputs.roll`, this invariant must be extended to cover it.
+
+**If `transition->update()` is re-enabled for Avatar in plane mode**, both `[AV-INVAR:ang-vel-pitch-bypass]` and `[AV-INVAR:ang-vel-roll-tracking]` must be reconsidered. See § 4.4.1.

@@ -1731,9 +1731,11 @@ void QuadPlane::update(void)
         
         // SBL: Force binary transition state based on mode for reliable testing
         plane_inputs.transition_progress = in_vtol_mode() ? 0.0f : 1.0f;
-        // In plane modes, pilot pitch stick controls tilt angle directly.
-        // In VTOL modes the copter attitude controller owns pitch; demand is zero.
-        plane_inputs.pitch_tilt_demand = in_vtol_mode() ? 0.0f : plane.channel_pitch->norm_input();
+        // Tilt demand: in VTOL modes zero (copter TVC owns pitch); in plane modes
+        // normalize nav_pitch_cd so TECS and pilot intent both drive tilt angle.
+        // [AV-INVAR:tilt-follows-nav-pitch] — see Avatar_Design.md § 9
+        plane_inputs.pitch_tilt_demand = in_vtol_mode() ? 0.0f :
+            constrain_float(plane.nav_pitch_cd / (plane.aparm.pitch_limit_max * 100.0f), -1.0f, 1.0f);
         ((AP_Motors6DOF*)motors)->set_plane_inputs(plane_inputs);
     }
 #endif
@@ -1799,10 +1801,7 @@ void QuadPlane::update(void)
         } else {
 #if ENABLE_TRICOPTER_VTOL_BACKEND
             if (!g_config.tricopter_is_blimp) {
-                // Avatar: skip transition->update() entirely in plane mode to prevent
-                // multicopter_attitude_rate_update() (called via hold_hover/hold_stabilize)
-                // from corrupting _attitude_target, _pd_scale and other attitude controller
-                // state that feeds into rate_controller_run().
+                // [AV-INVAR:transition-skip] — see Avatar_Design.md § 9
                 transition->force_transition_complete();
             } else {
                 transition->update();
@@ -1815,16 +1814,33 @@ void QuadPlane::update(void)
             // AP_Motors backend for ALL flight (Unified Mixing).
             set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
             if (!g_config.tricopter_is_blimp) {
-                // Avatar: directly set pitch rate target proportional to pitch error from level (0°).
-                // Uses rate_bf_pitch_target() to write _ang_vel_body.y directly — same pattern as
-                // rate_bf_yaw_target() — bypassing attitude_controller_run_quat() entirely.
-                // This avoids _attitude_target slewing from previous transition (nav_pitch_cd).
-                // I-term is also reset each loop since we use the rate PID as a P-only signal.
-                attitude_control->get_rate_pitch_pid().set_integrator(0.0f);
+                // [AV-INVAR:cos-tilt-i-zero] — I scale: full at <=45° (hover), zero at >=90° (cruise).
+                // Linear in tilt_deg. Prevents windup when cos_tilt gates motors off in the mixer
+                // while still allowing I to correct steady-state errors during hover.
+                // tilt_deg=0° is vertical (hover), tilt_deg=90° is horizontal (cruise).
+                const float tilt_deg = ((AP_Motors6DOF*)motors)->get_tilt_deg();
+                const float i_scale = constrain_float(1.0f - (tilt_deg - 45.0f) / 45.0f, 0.0f, 1.0f);
+
+                // [AV-INVAR:ang-vel-pitch-bypass] — see Avatar_Design.md § 9
+                AC_PID& pitch_pid = attitude_control->get_rate_pitch_pid();
+                if (i_scale < 1.0f) {
+                    pitch_pid.set_integrator(pitch_pid.get_i() * i_scale);
+                }
                 const float pitch_error_rad = -ahrs.get_pitch();  // 0° - actual_pitch
-                const float att_kP = attitude_control->get_angle_pitch_p().kP();
-                const float pitch_rate_cds = degrees(att_kP * pitch_error_rad) * 100.0f;
+                const float pitch_kP = attitude_control->get_angle_pitch_p().kP();
+                const float pitch_rate_cds = degrees(pitch_kP * pitch_error_rad) * 100.0f;
                 attitude_control->rate_bf_pitch_target(pitch_rate_cds);
+
+                // [AV-INVAR:ang-vel-roll-tracking] — see Avatar_Design.md § 9
+                AC_PID& roll_pid = attitude_control->get_rate_roll_pid();
+                if (i_scale < 1.0f) {
+                    roll_pid.set_integrator(roll_pid.get_i() * i_scale);
+                }
+                const float roll_error_rad = radians(plane.nav_roll_cd * 0.01f) - ahrs.get_roll();
+                const float roll_kP = attitude_control->get_angle_roll_p().kP();
+                const float roll_rate_cds = degrees(roll_kP * roll_error_rad) * 100.0f;
+                attitude_control->rate_bf_roll_target(roll_rate_cds);
+
                 attitude_control->set_throttle_out(get_pilot_throttle(), false, 0);
 
             }

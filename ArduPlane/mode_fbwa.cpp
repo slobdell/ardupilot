@@ -7,12 +7,6 @@ void ModeFBWA::update()
     // set nav_roll and nav_pitch using sticks
     plane.nav_roll_cd  = plane.channel_roll->norm_input() * plane.roll_limit_cd;
     plane.update_load_factor();
-#if ENABLE_TRICOPTER_VTOL_BACKEND && (ACTIVE_CONFIG == CONFIG_TYPE_AVATAR)
-    // Avatar: elevator is strictly attitude control. Pilot pitch goes to tilt
-    // rotors via PlaneInputs::pitch_tilt_demand; nav_pitch_cd stays zero so
-    // the pitch PID integrator winds up to whatever elevator position holds level.
-    plane.nav_pitch_cd = 0;
-#else
     float pitch_input = plane.channel_pitch->norm_input();
     if (pitch_input > 0) {
         plane.nav_pitch_cd = pitch_input * plane.aparm.pitch_limit_max*100;
@@ -24,7 +18,6 @@ void ModeFBWA::update()
     if (plane.fly_inverted()) {
         plane.nav_pitch_cd = -plane.nav_pitch_cd;
     }
-#endif
     if (plane.failsafe.rc_failsafe && plane.g.fs_action_short == FS_ACTION_SHORT_FBWA) {
         // FBWA failsafe glide
         plane.nav_roll_cd = 0;

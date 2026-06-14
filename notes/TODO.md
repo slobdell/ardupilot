@@ -23,6 +23,9 @@ Full design documented in § 4.6. Summary of changes needed:
 **Rear motor gain tuning**
 Rear motor contribution in plane mode (`(throttle_pct - inputs.pitch) * cos_tilt`) has not been flight-validated. The `inputs.pitch` gain is currently determined by `att_kP` from the copter attitude controller. May need a separate scaling factor once real flight behavior is observed.
 
+**Elevator gain scalar and slew rate limit**
+The elevator in plane mode is driven directly by the copter attitude PID output (`outputs.elevator_out = inputs.pitch`). If the P gain is too high, the servo may hunt continuously to null small pitch errors, risking servo burnout. After first flight, evaluate whether to add: (1) a `g_config.elevator_gain_scale` multiplier to reduce elevator authority independently of motor PID tuning, and (2) a per-loop slew rate cap (`g_config.elevator_slew_rate`) to bound how fast the servo can be commanded to move. Do not add these preemptively — observe actual servo behavior first.
+
 **Plane mode stall-prevention validation**
 The stall-prevention loop (elevator saturates → wings tilt upward via TVC pitch compensation) is theoretically sound and bench-verified, but the transition boundary behavior is untested. This is the highest-uncertainty element of the Avatar design.
 
