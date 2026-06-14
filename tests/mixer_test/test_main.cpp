@@ -444,6 +444,7 @@ void avatar_copter_shut_down_spool_clears_tilt_and_returns()
     CHECK_NEAR(0.0f, out.motor_thrust[0], 0.001f);
     CHECK_NEAR(0.0f, out.motor_thrust[1], 0.001f);
     CHECK_NEAR(0.0f, out.motor_thrust[2], 0.001f);
+    CHECK_NEAR(0.0f, out.motor_thrust[3], 0.001f);
     end_test();
 }
 
@@ -472,7 +473,7 @@ void avatar_copter_motor_outputs_stay_within_limits()
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         CHECK_TRUE(out.motor_thrust[i] >= -1.0f);
         CHECK_TRUE(out.motor_thrust[i] <=  1.0f);
     }
@@ -1153,37 +1154,32 @@ void qstabilize_pid_roll_drives_motor_differential_not_ailerons()
     end_test();
 }
 
-void qstabilize_pid_yaw_is_not_routed_to_motors_or_rudder()
+void qstabilize_pid_yaw_drives_rear_motor_differential()
 {
-    // inputs.yaw = 0.8 (attitude controller yaw PID output)
+    // inputs.yaw = 0.3 (attitude controller yaw PID output), wings vertical (cos_tilt = 1).
     // inputs.surface_yaw = 0.0 (pilot yaw stick neutral)
     //
-    // In the Avatar copter mixer, inputs.yaw has no effect.  Yaw authority in
-    // hover is provided entirely by pilot direct rudder command (surface_yaw →
-    // rudder_out).  The closed-loop yaw PID output is computed by ArduPilot but
-    // intentionally not mixed into any motor or surface.
+    // The closed-loop yaw PID drives differential thrust between the two rear motors:
+    //   rear_thrust = (throttle - pitch) * cos_tilt = 0.5 * 1.0 = 0.5
+    //   yaw_delta   = inputs.yaw * cos_tilt = 0.3 * 1.0 = 0.3
+    //   YAW_LEFT    = 0.5 + 0.3 = 0.8
+    //   YAW_RIGHT   = 0.5 - 0.3 = 0.2
     //
-    // This is a known design constraint: the Avatar has no differential yaw
-    // motor mechanism (unlike the production spring-lever design), so the only
-    // in-flight yaw tool is the V-tail rudder surface.  The attitude controller's
-    // yaw integrator will wind up in hover but it goes nowhere — this is accepted
-    // for the T1 Ranger test platform.
-    //
-    // If this test fails (rudder_out != 0 when surface_yaw == 0), the PID yaw
-    // has been unintentionally wired to the rudder, which would cause uncommanded
-    // yaw whenever ArduPilot accumulates yaw error.
+    // Rudder is driven only by surface_yaw (pilot stick) — PID yaw does not touch it.
+    // Wing motors are unaffected by yaw.
     begin_test(__func__);
     AvatarMixer  mixer;
     MixerInputs  in = neutral_copter_inputs();
-    in.yaw         = 0.8f;  // large PID yaw output
+    in.yaw         = 0.3f;  // PID yaw output
     in.surface_yaw = 0.0f;  // pilot yaw stick neutral
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(0.0f, out.rudder_out, 0.001f);              // rudder not driven by PID yaw
-    CHECK_NEAR(0.0f, out.aileron_out, 0.001f);             // ailerons also unaffected
-    // Motors: yaw is not mixed into wing motors either
-    CHECK_NEAR(out.motor_thrust[0], out.motor_thrust[1], 0.001f); // no differential from yaw
+    CHECK_NEAR(0.8f, out.motor_thrust[3], 0.01f); // YAW_LEFT  = rear + yaw_delta
+    CHECK_NEAR(0.2f, out.motor_thrust[2], 0.01f); // YAW_RIGHT = rear - yaw_delta
+    CHECK_NEAR(0.0f, out.rudder_out, 0.001f);     // rudder not driven by PID yaw
+    CHECK_NEAR(0.0f, out.aileron_out, 0.001f);    // ailerons unaffected
+    CHECK_NEAR(out.motor_thrust[0], out.motor_thrust[1], 0.001f); // wing motors unaffected
     end_test();
 }
 
@@ -1724,7 +1720,7 @@ int main()
     qstabilize_roll_stick_at_full_deflection_saturates_ailerons();
     qstabilize_yaw_stick_deflects_rudder_with_correct_sign();
     qstabilize_pid_roll_drives_motor_differential_not_ailerons();
-    qstabilize_pid_yaw_is_not_routed_to_motors_or_rudder();
+    qstabilize_pid_yaw_drives_rear_motor_differential();
     qstabilize_roll_and_yaw_sticks_drive_surfaces_independently();
 
     std::printf("\n-- Group I: Aircraft pitch state -> motor hierarchy --\n");

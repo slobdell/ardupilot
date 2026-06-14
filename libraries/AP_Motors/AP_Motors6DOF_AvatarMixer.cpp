@@ -19,7 +19,8 @@ namespace AP_Motors6DOF_Mixer {
 
 #define AVATAR_MOT_WING_LEFT  0
 #define AVATAR_MOT_WING_RIGHT 1
-#define AVATAR_MOT_YAW        2
+#define AVATAR_MOT_YAW_RIGHT  2
+#define AVATAR_MOT_YAW_LEFT   3
 
 const float AVATAR_MANUAL_YAW_DEADBAND = 0.05f;
 
@@ -38,6 +39,7 @@ void AvatarMixer::setup_motors(::AP_Motors6DOF* backend)
     backend->add_motor_raw_6dof(AP_MOTORS_MOT_1, noInput, noInput, noInput, 1.0f, noInput, noInput, 1);
     backend->add_motor_raw_6dof(AP_MOTORS_MOT_2, noInput, noInput, noInput, 1.0f, noInput, noInput, 2);
     backend->add_motor_raw_6dof(AP_MOTORS_MOT_3, noInput, noInput, yawFactor, 0.0f, noInput, noInput, 3);
+    backend->add_motor_raw_6dof(AP_MOTORS_MOT_4, noInput, noInput, yawFactor, 0.0f, noInput, noInput, 4);
 #endif
 }
 
@@ -96,19 +98,16 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         float roll_delta = inputs.roll * cos_tilt_b;
         outputs.motor_thrust[AVATAR_MOT_WING_LEFT]  = throttle_pct + roll_delta;
         outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = throttle_pct - roll_delta;
-        outputs.rudder_out   = inputs.plane.rudder_input / 4500.0f;
         outputs.aileron_out  = -inputs.plane.aileron_input / 4500.0f;
         float rear_demand = (throttle_pct - inputs.pitch) * cos_tilt_b;
         outputs.limit.pitch = (rear_demand > 1.0f || rear_demand < 0.0f);
-        outputs.motor_thrust[AVATAR_MOT_YAW] = constrain_float(rear_demand, 0.0f, 1.0f);
         // Yaw: pilot rudder input drives rear motor differential, fading from full authority
         // in hover to zero in cruise (same cos_tilt_b handoff as roll).
         // [AV-INVAR:yaw-handoff-cos-tilt] — see Avatar_Design.md § 9
-        // TODO(4th motor): when AVATAR_MOT_YAW_LEFT / AVATAR_MOT_YAW_RIGHT slots exist,
-        // replace the single AVATAR_MOT_YAW line above with:
-        //   float yaw_delta = (inputs.plane.rudder_input / 4500.0f) * cos_tilt_b;
-        //   outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_demand + yaw_delta, 0.0f, 1.0f);
-        //   outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_demand - yaw_delta, 0.0f, 1.0f);
+        float yaw_delta_b = (inputs.plane.rudder_input / 4500.0f) * cos_tilt_b;
+        outputs.rudder_out = inputs.plane.rudder_input / 4500.0f;
+        outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_demand + yaw_delta_b, 0.0f, 1.0f);
+        outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_demand - yaw_delta_b, 0.0f, 1.0f);
 
 #if AVATAR_DEBUG_LOG
         {
@@ -123,11 +122,11 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
                     (double)throttle_pct,
                     (double)inputs.pitch);
                 gcs().send_text(MAV_SEVERITY_INFO,
-                    "AVB tilt=%.2f cos=%.2f rear=%.2f ahrs_pitch_deg=%.1f",
+                    "AVB tilt=%.2f cos=%.2f yawL=%.2f yawR=%.2f",
                     (double)outputs.tilt_angle,
                     (double)cos_tilt_b,
-                    (double)outputs.motor_thrust[AVATAR_MOT_YAW],
-                    (double)degrees(inputs.ahrs_pitch_rad));
+                    (double)outputs.motor_thrust[AVATAR_MOT_YAW_LEFT],
+                    (double)outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT]);
             }
         }
 #endif
@@ -205,17 +204,14 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         outputs.limit.roll = (fabsf(desired_roll) > roll_headroom);
         outputs.motor_thrust[AVATAR_MOT_WING_LEFT]  = base_thrust + scaled_roll;
         outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = base_thrust - scaled_roll;
-        // Rear motor fades to zero at 90° and stays off beyond — it has no thrust
-        // vectoring so it loses relevance (and would invert without the floor) past 90°.
+        // Rear motors fade to zero at 90° and stay off beyond — fixed-direction thrust
+        // loses pitch relevance (and would invert without the floor) past 90°.
+        // Yaw: attitude PID output drives differential between the two rear motors, fading
+        // with cos_tilt. [AV-INVAR:yaw-handoff-cos-tilt] — see Avatar_Design.md § 9
         float rear_thrust = (inputs.throttle - inputs.pitch) * cos_tilt;
-        outputs.motor_thrust[AVATAR_MOT_YAW] = constrain_float(rear_thrust, 0.0f, 1.0f);
-        // Yaw: copter attitude PID output drives rear motor differential, fading with cos_tilt.
-        // [AV-INVAR:yaw-handoff-cos-tilt] — same handoff pattern as plane mode; see Avatar_Design.md § 9
-        // TODO(4th motor): when AVATAR_MOT_YAW_LEFT / AVATAR_MOT_YAW_RIGHT slots exist,
-        // replace the single AVATAR_MOT_YAW line above with:
-        //   float yaw_delta = inputs.yaw * cos_tilt;
-        //   outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_thrust + yaw_delta, 0.0f, 1.0f);
-        //   outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_thrust - yaw_delta, 0.0f, 1.0f);
+        float yaw_delta = inputs.yaw * cos_tilt;
+        outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_thrust + yaw_delta, 0.0f, 1.0f);
+        outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_thrust - yaw_delta, 0.0f, 1.0f);
         // Surfaces use FF-only pilot stick input for direct authority.
         // Motors use PID-derived inputs.roll/yaw for closed-loop stability.
         outputs.rudder_out   = inputs.surface_yaw;
@@ -237,11 +233,11 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
                     (double)inputs.yaw,
                     (double)outputs.aileron_out);
                 gcs().send_text(MAV_SEVERITY_INFO,
-                    "AV elev=%.2f rud=%.2f vtL=%.2f vtR=%.2f evL=%.2f evR=%.2f",
+                    "AV elev=%.2f rud=%.2f yawL=%.2f yawR=%.2f evL=%.2f evR=%.2f",
                     (double)outputs.elevator_out,
                     (double)outputs.rudder_out,
-                    (double)(outputs.elevator_out + outputs.rudder_out),
-                    (double)(outputs.elevator_out - outputs.rudder_out),
+                    (double)outputs.motor_thrust[AVATAR_MOT_YAW_LEFT],
+                    (double)outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT],
                     (double)(outputs.elevator_out + outputs.aileron_out),
                     (double)(outputs.elevator_out - outputs.aileron_out));
             }

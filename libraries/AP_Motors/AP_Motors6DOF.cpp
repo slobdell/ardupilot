@@ -195,7 +195,7 @@ bool AP_Motors6DOF::init(uint8_t expected_num_motors) {
     if(g_config.lateral_motors_config4) wantMotors = 8;
     if (g_config.caterpillar_h_frame_6dof) wantMotors = 9;
     if (ENABLE_TRICOPTER_VTOL_BACKEND) {
-      wantMotors = 3;
+        wantMotors = g_config.tricopter_is_blimp ? 3 : 4;
     }
 
     uint8_t num_motors = 0;
