@@ -106,8 +106,8 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // [AV-INVAR:yaw-handoff-cos-tilt] — see Avatar_Design.md § 9
         float yaw_delta_b = (inputs.plane.rudder_input / 4500.0f) * cos_tilt_b;
         outputs.rudder_out = inputs.plane.rudder_input / 4500.0f;
-        outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_demand + yaw_delta_b, 0.0f, 1.0f);
-        outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_demand - yaw_delta_b, 0.0f, 1.0f);
+        outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_demand - yaw_delta_b, 0.0f, 1.0f);
+        outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_demand + yaw_delta_b, 0.0f, 1.0f);
 
 #if AVATAR_DEBUG_LOG
         {
@@ -209,9 +209,14 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // Yaw: attitude PID output drives differential between the two rear motors, fading
         // with cos_tilt. [AV-INVAR:yaw-handoff-cos-tilt] — see Avatar_Design.md § 9
         float rear_thrust = (inputs.throttle - inputs.pitch) * cos_tilt;
-        float yaw_delta = inputs.yaw * cos_tilt;
-        outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_thrust + yaw_delta, 0.0f, 1.0f);
-        outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_thrust - yaw_delta, 0.0f, 1.0f);
+        // The AHRS gyro Z convention is inverted for this board: positive gyro.z = physical left yaw.
+        // The attitude controller's rate PID therefore has the wrong sign (Q_A_RAT_YAW_P/I must be 0).
+        // We implement yaw rate damping here directly. Positive gyro.z needs positive yaw_delta
+        // (→ YAW_LEFT↑ → right yaw correction). Start at 0.1 and tune up until oscillation.
+        const float AVATAR_YAW_DAMP_GAIN = 0.1f;
+        float yaw_delta = (inputs.yaw + inputs.gyro.z * AVATAR_YAW_DAMP_GAIN) * cos_tilt;
+        outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_thrust - yaw_delta, 0.0f, 1.0f);
+        outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_thrust + yaw_delta, 0.0f, 1.0f);
         // Surfaces use FF-only pilot stick input for direct authority.
         // Motors use PID-derived inputs.roll/yaw for closed-loop stability.
         outputs.rudder_out   = inputs.surface_yaw;
@@ -225,13 +230,13 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
             if (now_ms - last_log_ms >= 3000) {
                 last_log_ms = now_ms;
                 gcs().send_text(MAV_SEVERITY_INFO,
-                    "AV fwd=%.2f thr=%.2f tilt=%.1f roll=%.2f yaw=%.2f ail=%.2f",
+                    "AV fwd=%.2f thr=%.2f tilt=%.1f roll=%.2f yaw=%.2f gz=%.2f",
                     (double)inputs.forward,
                     (double)throttle_thrust,
                     (double)state.current_tilt_deg,
                     (double)inputs.roll,
                     (double)inputs.yaw,
-                    (double)outputs.aileron_out);
+                    (double)inputs.gyro.z);
                 gcs().send_text(MAV_SEVERITY_INFO,
                     "AV elev=%.2f rud=%.2f yawL=%.2f yawR=%.2f evL=%.2f evR=%.2f",
                     (double)outputs.elevator_out,

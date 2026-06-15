@@ -1162,8 +1162,8 @@ void qstabilize_pid_yaw_drives_rear_motor_differential()
     // The closed-loop yaw PID drives differential thrust between the two rear motors:
     //   rear_thrust = (throttle - pitch) * cos_tilt = 0.5 * 1.0 = 0.5
     //   yaw_delta   = inputs.yaw * cos_tilt = 0.3 * 1.0 = 0.3
-    //   YAW_LEFT    = 0.5 + 0.3 = 0.8
-    //   YAW_RIGHT   = 0.5 - 0.3 = 0.2
+    //   YAW_LEFT    = 0.5 - 0.3 = 0.2
+    //   YAW_RIGHT   = 0.5 + 0.3 = 0.8
     //
     // Rudder is driven only by surface_yaw (pilot stick) — PID yaw does not touch it.
     // Wing motors are unaffected by yaw.
@@ -1175,8 +1175,8 @@ void qstabilize_pid_yaw_drives_rear_motor_differential()
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(0.8f, out.motor_thrust[3], 0.01f); // YAW_LEFT  = rear + yaw_delta
-    CHECK_NEAR(0.2f, out.motor_thrust[2], 0.01f); // YAW_RIGHT = rear - yaw_delta
+    CHECK_NEAR(0.2f, out.motor_thrust[3], 0.01f); // YAW_LEFT  = rear - yaw_delta
+    CHECK_NEAR(0.8f, out.motor_thrust[2], 0.01f); // YAW_RIGHT = rear + yaw_delta
     CHECK_NEAR(0.0f, out.rudder_out, 0.001f);     // rudder not driven by PID yaw
     CHECK_NEAR(0.0f, out.aileron_out, 0.001f);    // ailerons unaffected
     CHECK_NEAR(out.motor_thrust[0], out.motor_thrust[1], 0.001f); // wing motors unaffected
