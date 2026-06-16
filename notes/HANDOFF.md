@@ -1,4 +1,4 @@
-# Avatar Flight Handoff — PID Tuning (Roll & Yaw)
+# Avatar Flight Handoff — PID Tuning (Roll & Yaw) + Next Task: Thrust Linearization
 
 **Date:** June 2026  
 **Airframe:** Hee-wing T1 Ranger  
@@ -130,6 +130,66 @@ Current values (P=I=0.25, D=0.003) were tuned before the dual rear yaw motors we
 | 2025 | 15° past vertical (braking) |
 
 SERVO5_MAX = 2025 opens the braking range. The mixer must clamp to 1827 for normal flight and only allow beyond 1827 when braking is commanded.
+
+---
+
+---
+
+## Next Task: Thrust Linearization
+
+### The Problem
+
+The motor mixing pipeline currently outputs thrust fractions (0.0–1.0) that are converted to PWM **linearly** in `AP_Motors6DOF::calc_thrust_to_pwm()` (`libraries/AP_Motors/AP_Motors6DOF.cpp`, line 245):
+
+```cpp
+return (thrust_in * (get_pwm_output_max() - minPwm)) + minPwm;
+```
+
+This is wrong. Motor thrust is proportional to RPM², and RPM is roughly proportional to PWM for a linear ESC (DShot). Therefore:
+
+```
+thrust ∝ PWM²
+```
+
+A command of 50% throttle sends 50% PWM but produces only ~25% of maximum thrust. This means:
+- The mixer's roll differential, rear motor mixing, and TVC throttle scaling all assume linear thrust but receive quadratic output
+- Gain-scheduled control is inconsistent across the throttle range
+- Hover throttle is higher than it should be, and low-throttle authority is worse than intended
+
+### What Already Exists (Not Yet Applied)
+
+`Q_M_THST_EXPO = 0.65` is in the golden param file (`params/avatar_t1ranger_micoair.param`). This is ArduPilot's standard thrust expo parameter. Standard `AP_MotorsMulticopter` applies it via `thrust_to_actuator()`:
+
+```cpp
+// Standard ArduPilot formula (AP_MotorsMulticopter.cpp):
+float actuator = expo * (thrust * thrust - thrust) + thrust;
+// At expo=0: actuator = thrust (linear, current broken state)
+// At expo=1: actuator = thrust² (full quadratic correction)
+// At expo=0.65: partial correction matched to typical motor curves
+```
+
+Our custom `calc_thrust_to_pwm()` ignores this entirely — `Q_M_THST_EXPO` has no effect on our motors.
+
+### Where to Make the Fix
+
+The fix belongs in `AP_Motors6DOF::calc_thrust_to_pwm()` (`libraries/AP_Motors/AP_Motors6DOF.cpp`, line 245). Apply the expo curve to `thrust_in` before the linear PWM scaling:
+
+```cpp
+// Read expo from the standard ArduPilot parameter (already exists on the object)
+float expo = constrain_float(_thrust_curve_expo, 0.0f, 1.0f);
+float linearized = expo * (thrust_in * thrust_in - thrust_in) + thrust_in;
+return (linearized * (get_pwm_output_max() - minPwm)) + minPwm;
+```
+
+`_thrust_curve_expo` is the member variable backing `Q_M_THST_EXPO` — it is already declared in `AP_MotorsMulticopter` which `AP_Motors6DOF` inherits from. Confirm the member name by checking `AP_Motors/AP_MotorsMulticopter.h`.
+
+Note: this only applies to the non-reversible path. The reversible path (blimp tail motor) uses a different formula and should be evaluated separately.
+
+### Context on the Mixer Architecture
+
+The mixer (`libraries/AP_Motors/AP_Motors6DOF_AvatarMixer.cpp`) outputs `motor_thrust[i]` values in the range [0, 1] representing **thrust fractions**, not PWM fractions. The design intent is that 0.5 means 50% of maximum thrust. The `calc_thrust_to_pwm` function is the sole conversion point between that intent and actual PWM — fixing it there corrects the entire pipeline without touching mixer logic.
+
+The TVC brain (`tvc_run_main_logic` in `libraries/AP_Motors/TVC_Core.cpp`) also works in thrust-fraction space and its `total_throttle` output is passed directly to `motor_thrust`. So linearization at `calc_thrust_to_pwm` is the right and complete fix.
 
 ---
 

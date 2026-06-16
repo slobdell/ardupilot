@@ -219,10 +219,8 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         float yaw_delta = inputs.yaw * cos_tilt;
         outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_thrust + yaw_delta, 0.0f, 1.0f);
         outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_thrust - yaw_delta, 0.0f, 1.0f);
-        // Surfaces use FF-only pilot stick input for direct authority.
-        // Motors use PID-derived inputs.roll/yaw for closed-loop stability.
-        outputs.rudder_out   = inputs.surface_yaw;
-        outputs.aileron_out  = -inputs.surface_roll;
+        outputs.rudder_out   = inputs.yaw;
+        outputs.aileron_out  = -inputs.roll;
         outputs.elevator_out = -cos_tilt;
 
 #if AVATAR_DEBUG_LOG

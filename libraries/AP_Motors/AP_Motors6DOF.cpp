@@ -247,7 +247,8 @@ int16_t AP_Motors6DOF::calc_thrust_to_pwm(float thrust_in, bool reversible) cons
     if(!reversible) {
         int16_t minPwm = get_pwm_output_min();
         if(thrust_in <= 0) return minPwm;
-        return (thrust_in * (get_pwm_output_max() - minPwm)) + minPwm;
+        float linearized = thr_lin.apply_thrust_curve_and_volt_scaling(thrust_in);
+        return (linearized * (get_pwm_output_max() - minPwm)) + minPwm;
     }
     if(fabsf(thrust_in) <= DEAD_BAND) thrust_in = 0;
     int16_t range_up = get_pwm_output_max() - g_config.mot_spin_neutral;
