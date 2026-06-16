@@ -385,6 +385,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
     mixer_in.dt = _dt;
     mixer_in.spool_state = _spool_state;
     mixer_in.is_armed = armed();
+    mixer_in.spin_min = thr_lin.get_spin_min();
     mixer_in.tilt_rate_up_dps   = 40.0f;
     mixer_in.tilt_rate_down_dps = 0.0f;
 

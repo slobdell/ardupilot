@@ -260,6 +260,17 @@ TVC_Outputs tvc_run_main_logic(const TVC_Inputs& inputs, TVC_CoreState& state, c
     clip_vectors_for_saturation(base_throttles, &vector_pitch_out, &vector_roll_out, state.pitch_saturated, state.roll_saturated);
 #endif
 
+    // When the servo saturates, re-derive the achievable forward component from the clamped
+    // angle so total_throttle reflects what the servo can actually produce. Without this,
+    // full back stick at low throttle computes total_throttle from the unclamped forward_cmd,
+    // spinning the motors faster than the clamped angle can usefully direct.
+    if (state.pitch_saturated) {
+        float clamped_angle_deg = (vector_pitch_out >= 0.0f)
+            ? vector_pitch_out * g_config.forward_flight_physical_angle_deg
+            : vector_pitch_out * fabsf(g_config.reverse_flight_physical_angle_deg);
+        forward_cmd = thrust_cmd * tanf(clamped_angle_deg * (M_PI / 180.0f));
+    }
+
     // Calculate total magnitude of the pilot's 3D request (Vertical + Forward + Lateral)
     float total_throttle = sqrtf(powf(forward_cmd, 2) + powf(lateral_cmd, 2) + powf(thrust_cmd, 2));
     total_throttle = constrain_float(total_throttle, 0.0f, 1.0f);

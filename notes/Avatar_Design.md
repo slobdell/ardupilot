@@ -18,13 +18,18 @@ The design goal is that this transition happens **automatically and continuously
 ### 2.1 Motors
 - **Motor 1 (Left Wing):** Fixed to the left wing, tilts with the wing. Provides lift and/or forward thrust depending on wing angle.
 - **Motor 2 (Right Wing):** Fixed to the right wing, tilts with the wing. Always commanded identical thrust to Motor 1.
-- **Motor 3 (Rear, Optional):** Rear-mounted motor. Provides yaw authority at low speeds, and progressively contributes lift as the wings tilt upward. Not present on the initial T1 Ranger test airframe.
+- **Motor 3 (Rear Right Yaw):** Spring-lever mounted rear motor. Differential thrust with Motor 4 produces lateral (yaw) force via the spring-lever mechanism. Also contributes lift as wings tilt toward vertical.
+- **Motor 4 (Rear Left Yaw):** Spring-lever mounted rear motor, paired with Motor 3 for differential yaw.
 
 ### 2.2 Servos
 - **Single Tilt Servo:** Drives both wings simultaneously via a shared mechanical linkage. Controls the pitch axis of the thrust vector only. **Roll axis tilt is mechanically impossible** and is not implemented.
 
-### 2.3 Yaw (Production Design)
-In the full production design, the two rear motors are mounted on spring-controlled levers. Increasing yaw thrust on one side causes that motor to swing outward and deliver side thrust, providing yaw authority at low speeds and in copter mode. This mechanism is **not present on the T1 Ranger test airframe**; yaw is uncontrolled during testing and accepted as a limitation.
+### 2.3 Yaw
+Two rear motors on spring-loaded levers provide yaw authority at low speeds and in copter mode. Differential thrust causes the higher-thrust motor to swing outward and deliver lateral side force. **This mechanism is implemented on the T1 Ranger test airframe** (Motor 3 = right rear on SERVO3, Motor 4 = left rear on SERVO2).
+
+**Sign convention:** positive `inputs.yaw` = right yaw. In the mixer: `YAW_LEFT = rear + yaw_delta`, `YAW_RIGHT = rear - yaw_delta`. Note this is opposite to the intuition from torque-based copter yaw — the differential here is thrust, not torque.
+
+**PID tuning:** `Q_A_RAT_YAW_P` and `Q_A_RAT_YAW_I` use standard positive values (start at 0.05 / 0.005). `Q_A_RAT_YAW_FF = 0.5` provides direct stick feedthrough. The attitude controller's yaw rate PID sign is correct with the current motor assignment.
 
 ### 2.4 Roll Control
 Roll is achieved via differential thrust between the two wing motors. Effectiveness scales with `cos(wing_tilt_angle)`:
@@ -419,7 +424,7 @@ The Avatar is designed to hover nose-into-wind during loiter. ArduPlane's stock 
 |-------|-------|-----------|
 | `tricopter_is_blimp` | false | Selects AvatarMixer |
 | `forward_flight_physical_angle_deg` | 90.0° | Wings horizontal = max forward |
-| `reverse_flight_physical_angle_deg` | 0.0° | No downward thrust needed |
+| `reverse_flight_physical_angle_deg` | -15.0° | 15° past vertical for braking |
 | `platform_max_angle_deg` | 90.0° | Full tilt range |
 | `mot_spin_neutral` | 1000 | Non-reversible motors |
 | `diff_yaw_enabled` | 1 | Differential yaw (for rear motor) |
@@ -468,7 +473,7 @@ mixer_in.surface_pitch = _pilot_pitch;
 
 ### 6.2 Implemented and Bench-Verified (T1 Ranger, June 2026)
 
-**`AvatarMixer::setup_motors()`** — 3 motors: left wing, right wing, rear yaw motor.
+**`AvatarMixer::setup_motors()`** — 4 motors: left wing, right wing, right rear yaw, left rear yaw.
 
 **`AvatarMixer::mix()` — Copter mode:**
 - TVC brain (`tvc_run_main_logic`) — same as blimp, full pitch compensation and stall prevention
@@ -477,7 +482,7 @@ mixer_in.surface_pitch = _pilot_pitch;
 - Ailerons use `surface_roll` (pilot stick directly, not `sin_tilt` scaled)
 - Elevator uses `cos_tilt` trim schedule
 - Rudder uses `surface_yaw` (pilot stick directly)
-- Rear yaw motor gets `inputs.yaw`
+- Dual rear motors get differential yaw: `YAW_LEFT = rear - yaw_delta`, `YAW_RIGHT = rear + yaw_delta` where `yaw_delta = inputs.yaw * cos_tilt`
 
 **`AvatarMixer::mix()` — Plane mode:**
 - Direct tilt control via pilot pitch stick; elevator is driven by ArduPlane's fixed-wing pitch PID (see section 4.4)
@@ -485,7 +490,7 @@ mixer_in.surface_pitch = _pilot_pitch;
 
 **Surface control:** Pilot stick fed via `set_pilot_roll/pitch/yaw` setters from `ModeQStabilize::update()` (see section 4.10).
 
-**Motor count fix** — `wantMotors` is 3 for both blimp and Avatar.
+**Motor count fix** — `wantMotors` is 4 for Avatar, 3 for blimp.
 
 **Forward input normalization** — `AVATAR_FORWARD_INPUT_MAX = 0.42f`. `Q_ANGLE_MAX = 30°` caps pilot pitch demand so `_forward_in` never reaches 1.0 at full stick. Dividing by 0.42 re-normalises full stick to 1.0 for the TVC.
 
@@ -508,7 +513,8 @@ mixer_in.surface_pitch = _pilot_pitch;
 | Pin | Physical connection | ArduPilot function | Param | Mixer output |
 |-----|--------------------|--------------------|-------|--------------|
 | 1 | Left wing motor ESC | Motor 1 | `SERVO1_FUNCTION = 33` | — |
-| 3 | Rear tail motor ESC | Motor 3 | `SERVO3_FUNCTION = 35` | — |
+| 2 | Left rear yaw motor ESC | Motor 4 | `SERVO2_FUNCTION = 36` | — |
+| 3 | Right rear yaw motor ESC | Motor 3 | `SERVO3_FUNCTION = 35` | — |
 | 4 | Right wing motor ESC | Motor 2 | `SERVO4_FUNCTION = 34` | — |
 | 5 | Wing tilt servo | Scripting2 | `SERVO5_FUNCTION = 95` | `tilt_angle` |
 | 6 | Aileron left | Scripting3 | `SERVO6_FUNCTION = 96` | `aileron_out` |
@@ -532,13 +538,13 @@ The tilt servo uses `set_output_norm` via the Scripting2 channel, which uses `pw
 |---|---|---|
 | `0.0` | Wings vertical (hover) | TRIM = **1827** |
 | `+1.0` | Wings horizontal (forward) | MIN = **811** |
-| `-1.0` | Backward limit (clamped) | MAX = **1827** |
+| `-1.0` | 15° past vertical (braking) | MAX = **2025** |
 
-Setting `SERVO5_MAX = SERVO5_TRIM = 1827` prevents the servo from driving past vertical in the backward direction. Parameters:
+`reverse_flight_physical_angle_deg = -15.0f` in `avatarConfig`. `SERVO5_MAX = 2025` calibrated to the physical braking limit. Parameters:
 ```
 SERVO5_MIN  = 811
 SERVO5_TRIM = 1827
-SERVO5_MAX  = 1827
+SERVO5_MAX  = 2025
 Q_TILT_RATE_UP = <measured>   (physical slew rate of tilt mechanism in deg/s — see [AV-INVAR:tilt-servo-tracking])
 ```
 
@@ -568,7 +574,7 @@ This validates the core 6DOF thrust-vector concept without relying on aerodynami
 
 **Bench-verified (T1 Ranger, June 2026):**
 - Roll authority via differential wing motor thrust ✓
-- Yaw authority via rear motor + V-tail rudder ✓
+- Yaw authority via dual rear motor differential + V-tail rudder ✓
 - Aileron mixing (elevons) responds correctly to roll stick ✓
 - V-tail mixing responds correctly to yaw stick ✓
 - Tilt servo sweeps correctly from vertical (1827) to horizontal (811) ✓
@@ -747,7 +753,7 @@ These are non-obvious decisions that look wrong without context and are therefor
 
 **Why:** In a static hover the rudder surface produces no moment. In full forward flight it is inefficient and unnecessary to use rear motor differential for yaw when the rudder handles it. The cosine of the tilt angle is the correct transition function because it naturally tracks the same motor-to-surface authority handoff already used for roll.
 
-**Why not implemented yet:** The second rear motor (AVATAR_MOT_YAW_RIGHT) does not exist in hardware. The mixer code documents the intended formula as a TODO comment so the plumbing is unambiguous when the 4th motor is added.
+**Status:** Fully implemented on T1 Ranger. Both rear motors present and wired. See section 2.3 for sign convention and PID starting values.
 
 ---
 

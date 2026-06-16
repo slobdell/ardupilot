@@ -535,6 +535,56 @@ void total_throttle_increases_with_tilt_because_motors_must_work_harder_to_maint
     end_test();
 }
 
+// --- Reverse saturation: throttle must not spike when servo is at braking limit ---
+
+void reverse_saturation_clamps_total_throttle_to_achievable_thrust()
+{
+    // Bug regression: full back stick at low throttle caused total_throttle to spike
+    // toward 1.0 even though the servo was clamped at the braking limit (-15°).
+    //
+    // Root cause: total_throttle was computed from the raw forward_cmd (-0.995 after
+    // Pythagorean clipping), not from the achievable forward component at the clamped
+    // angle. sqrt(0.995² + 0.1²) ≈ 1.0 — motors at full speed pointing mostly upward,
+    // creating an unintended pitch moment.
+    //
+    // Fix: when pitch_saturated, replace forward_cmd with the component achievable at
+    // the clamped angle before computing total_throttle:
+    //   forward_achievable = thrust_cmd * tan(reverse_flight_physical_angle_deg)
+    //                      = 0.1 * tan(-15°) ≈ -0.0268
+    //   total_throttle = sqrt(0.0268² + 0.1²) ≈ 0.104
+    //
+    // This equals thrust_cmd / cos(15°) — motors spin just fast enough to maintain
+    // the vertical thrust component, with the small achievable backward component as
+    // a side effect.
+    //
+    // Forward direction is not affected: Avatar's non-reversible thrust_cmd ≥ 0 bounds
+    // atan2(forward_cmd, thrust_cmd) ≤ 90° = forward_flight_physical_angle_deg, so
+    // the servo never saturates forward and the raw forward_cmd is always achievable.
+    begin_test(__func__);
+
+    TVCTestState state;
+    TVC_CoreState core = state.core();
+    TVC_Inputs in = neutral_hover_inputs();
+    in.rc_in[THRUST_CHANNEL]  = pwm(0.1f);  // 10% throttle — Avatar: 1550 µs → thrust_cmd = 0.1
+    in.rc_in[FORWARD_CHANNEL] = pwm(-1.0f); // full back stick → forward_cmd = -1.0 (clipped to -0.995)
+    in.pitch_rad = 0.0f;
+
+    TVC_Outputs out = tvc_run_main_logic(in, core, tvc_config);
+
+    // Servo must be at its reverse limit.
+    CHECK_NEAR(-1.0f, out.pitch_angle_norm, 0.001f);
+    CHECK_TRUE(state.pitch_saturated);
+
+    // total_throttle must track thrust, not spike toward 1.0.
+    // Expected: thrust_cmd / cos(15°) = 0.1 / 0.9659 ≈ 0.104.
+    CHECK_NEAR(0.104f, out.total_throttle, 0.01f);
+
+    // Explicit guard: must not be near 1.0 (the pre-fix value).
+    CHECK_TRUE(out.total_throttle < 0.2f);
+
+    end_test();
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -561,6 +611,7 @@ int main()
     partial_transition_interpolates_between_hover_and_forward_flight_angle();
     failsafe_zeroes_tilt_commands_regardless_of_stick_inputs();
     total_throttle_increases_with_tilt_because_motors_must_work_harder_to_maintain_lift();
+    reverse_saturation_clamps_total_throttle_to_achievable_thrust();
 
     std::printf("\n=== Results: %d checks, %d failed ===\n",
                 g_checks_run, g_checks_failed);

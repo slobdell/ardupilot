@@ -106,8 +106,8 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // [AV-INVAR:yaw-handoff-cos-tilt] — see Avatar_Design.md § 9
         float yaw_delta_b = (inputs.plane.rudder_input / 4500.0f) * cos_tilt_b;
         outputs.rudder_out = inputs.plane.rudder_input / 4500.0f;
-        outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_demand - yaw_delta_b, 0.0f, 1.0f);
-        outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_demand + yaw_delta_b, 0.0f, 1.0f);
+        outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_demand + yaw_delta_b, 0.0f, 1.0f);
+        outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_demand - yaw_delta_b, 0.0f, 1.0f);
 
 #if AVATAR_DEBUG_LOG
         {
@@ -138,6 +138,13 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         state.manual_override_active = false;
         if (inputs.spool_state == AP_Motors::SpoolState::SHUT_DOWN) {
             state.current_tilt_deg = 0.0f;
+            return;
+        }
+        if (inputs.spool_state == AP_Motors::SpoolState::GROUND_IDLE) {
+            // Guarantee DShot 0 to all motors during ground idle so ESCs can
+            // complete their arming timer. The full mixer must not run here —
+            // a negative pitch PID value produces rear_thrust > 0, which resets
+            // the ESC arming timer and leaves the rear motors permanently unarmed.
             return;
         }
 
@@ -209,14 +216,9 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // Yaw: attitude PID output drives differential between the two rear motors, fading
         // with cos_tilt. [AV-INVAR:yaw-handoff-cos-tilt] — see Avatar_Design.md § 9
         float rear_thrust = (inputs.throttle - inputs.pitch) * cos_tilt;
-        // The AHRS gyro Z convention is inverted for this board: positive gyro.z = physical left yaw.
-        // The attitude controller's rate PID therefore has the wrong sign (Q_A_RAT_YAW_P/I must be 0).
-        // We implement yaw rate damping here directly. Positive gyro.z needs positive yaw_delta
-        // (→ YAW_LEFT↑ → right yaw correction). Start at 0.1 and tune up until oscillation.
-        const float AVATAR_YAW_DAMP_GAIN = 0.1f;
-        float yaw_delta = (inputs.yaw + inputs.gyro.z * AVATAR_YAW_DAMP_GAIN) * cos_tilt;
-        outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_thrust - yaw_delta, 0.0f, 1.0f);
-        outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_thrust + yaw_delta, 0.0f, 1.0f);
+        float yaw_delta = inputs.yaw * cos_tilt;
+        outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_thrust + yaw_delta, 0.0f, 1.0f);
+        outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_thrust - yaw_delta, 0.0f, 1.0f);
         // Surfaces use FF-only pilot stick input for direct authority.
         // Motors use PID-derived inputs.roll/yaw for closed-loop stability.
         outputs.rudder_out   = inputs.surface_yaw;
@@ -248,6 +250,18 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
             }
         }
 #endif
+    }
+
+    // Apply spin_min floor when airborne so motors never receive DShot 0 mid-flight.
+    // Mirrors what AP_MotorsMulticopter does for standard copters — prevents AM32 stall
+    // protection from triggering on pitch excursions that drive rear_thrust to zero.
+    bool airborne = (inputs.spool_state == AP_Motors::SpoolState::THROTTLE_UNLIMITED ||
+                     inputs.spool_state == AP_Motors::SpoolState::SPOOLING_UP ||
+                     inputs.spool_state == AP_Motors::SpoolState::SPOOLING_DOWN);
+    if (airborne) {
+        for (int i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
+            outputs.motor_thrust[i] = MAX(outputs.motor_thrust[i], inputs.spin_min);
+        }
     }
 
     for (int i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) outputs.motor_thrust[i] = constrain_float(outputs.motor_thrust[i], -1.0f, 1.0f);

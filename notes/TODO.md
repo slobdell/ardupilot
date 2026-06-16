@@ -40,6 +40,13 @@ Note: in plane mode, setting `Q_TILT_RATE_UP` at or below the real servo speed g
 **Plane mode stall-prevention validation**
 The stall-prevention loop (elevator saturates → wings tilt upward via TVC pitch compensation) is theoretically sound and bench-verified, but the transition boundary behavior is untested. Tilt slew rate limiting is now implemented and unit-tested ([AV-INVAR:plane-tilt-slew]): releasing the pitch stick takes 3 seconds to reach full forward tilt. This is the highest-uncertainty element of the Avatar design in real flight.
 
+**Yaw PID gain tuning — oscillation, needs D term**
+Current flight-tested values (criss-cross thrust geometry, June 2026): `Q_A_ANG_YAW_P=2.0`, `Q_A_RAT_YAW_P=0.03`, `Q_A_RAT_YAW_I=0.01`, `Q_A_RAT_YAW_FF=0.5`, `Q_A_RAT_YAW_D=0`.
+
+There is still residual oscillation from the differential rear motor thrust. `Q_A_RAT_YAW_D` is currently zero and is the next lever to try — add D in small increments (start at 0.001) to damp the oscillation without reintroducing instability. Do not increase P or ANG_YAW_P until D is explored; the oscillation is likely underdamped rather than undergained.
+
+Note: when the yaw mechanism is rebuilt with outward-pushing geometry (replacing current criss-cross), swap the `+`/`-` yaw_delta assignment back in `AvatarMixer::mix()` and re-tune from scratch — the gains will not transfer.
+
 **Param hygiene**
 Current parameter files include bench-testing values. Before first flight: audit `Q_A_RAT_*` gains, `SERVO_BLH_*` DShot masks, and arming check flags. Ensure `ARMING_CHECK` is not globally disabled.
 
