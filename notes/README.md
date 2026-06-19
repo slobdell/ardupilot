@@ -10,7 +10,7 @@ Both aircraft share the same firmware binary, config system, and TVC (Thrust Vec
 
 **Blimp** — 95% buoyant, nose-heavy, 2 vectoring gondola motors + tail yaw motor. Uses a split-range "vectoring as virtual elevator" approach in plane mode. Copter mode uses pure TVC tilt with no pitch PID (high rotational inertia). Not yet flight-tested (helium cost); Avatar validation carries over.
 
-**Avatar** — Tilt-wing fixed-wing (test airframe: Hee-wing T1 Ranger). Wings rotate on a servo-driven axis: vertical for hover, horizontal for forward flight. Bench-tested June 2026 on MicoAir H743. Shares TVC brain with blimp.
+**Avatar** — Tilt-wing fixed-wing (test airframe: Zoh Altus VTOL). Wings rotate on a servo-driven axis: vertical for hover, horizontal for forward flight. Bench-tested June 2026 on MicoAir H743. Shares TVC brain with blimp.
 
 ---
 
@@ -33,7 +33,7 @@ Both aircraft share the same firmware binary, config system, and TVC (Thrust Vec
 ### Aircraft Design
 
 **[Avatar_Design.md](Avatar_Design.md)**
-Current design document for the Avatar tilt-wing fixed-wing. Covers control architecture (6DOF mixer philosophy, TVC brain, stall prevention, plane-mode pitch control, rear motor stabilization), servo assignments and calibration for the T1 Ranger, the `AvatarMixer` implementation, and the production aircraft design intent. **Start here when working on Avatar.**
+Current design document for the Avatar tilt-wing fixed-wing. Covers control architecture (6DOF mixer philosophy, TVC brain, stall prevention, plane-mode pitch control, rear motor stabilization), servo assignments and calibration for the Zoh Altus VTOL, the `AvatarMixer` implementation, and the production aircraft design intent. **Start here when working on Avatar.**
 
 **[Blimp_Design.md](Blimp_Design.md)**
 Design, setup, and parameter reference for the blimp. Covers the physics rationale (nose-heavy, no roll control, high inertia, zero stall speed), the split-range "vectoring as virtual elevator" architecture, TECS modifications for zero-airspeed flight, full parameter tables, hardware wiring for MicoAir H743 (with MatekH743 as alternative), peripherals (lidar, optical flow), and EKF3 fusion config. **Start here when working on the blimp.**

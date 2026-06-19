@@ -6,6 +6,7 @@ Usage:
     python3 param_set.py WVANE_GAIN 1.0
     python3 param_set.py Q_TILT_RATE_UP 120 WVANE_DIRECTION 1
     python3 param_set.py --port /dev/ttyACM0 ARMING_CHECK 50
+    python3 param_set.py --elrs Q_A_RAT_YAW_P 0.04
 """
 
 import sys
@@ -51,10 +52,12 @@ def get_param(mav, name, retries=3):
 
 
 def main():
+    from connect import ELRS_PORT
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--port', default='/dev/ttyACM0')
     parser.add_argument('--baud', type=int, default=115200)
+    parser.add_argument('--elrs', action='store_true', help=f'Connect via ELRS TX Backpack WiFi ({ELRS_PORT})')
     parser.add_argument('params', nargs='+',
                         help='Alternating NAME VALUE pairs, e.g. WVANE_GAIN 1.0 WVANE_DIRECTION 1')
     args = parser.parse_args()
@@ -65,7 +68,7 @@ def main():
 
     pairs = [(args.params[i].upper(), args.params[i+1]) for i in range(0, len(args.params), 2)]
 
-    mav = connect(args.port, args.baud)
+    mav = connect(args.port, args.baud, elrs=args.elrs)
 
     for name, value in pairs:
         before = get_param(mav, name)

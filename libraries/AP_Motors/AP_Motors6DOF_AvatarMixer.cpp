@@ -58,27 +58,38 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
     if (in_plane_mode) {
         // =====================================================================
         // --- STATE B: PLANE MODE ---
-        // Pilot pitch stick drives tilt angle directly (positive = more vertical).
-        // Elevator is strictly attitude control: nav_pitch_cd=0 in FBWA so the
-        // pitch PID integrator winds up to whatever position holds level.
+        // Tilt is either rate-controlled (STABILIZE) or position-controlled (FBWA/auto).
+        // Elevator holds level via the copter attitude PID in both sub-modes.
         // =====================================================================
         state.manual_override_active = false;
 
-        // [AV-INVAR:plane-tilt-slew] — see Avatar_Design.md § 9
-        // Tilt: nav_pitch_cd (pilot + TECS) sets the target; state.current_tilt_deg slews toward
-        // it at an asymmetric rate — fast toward vertical (Q_TILT_RATE_UP, servo physical speed)
-        // for rapid stall recovery, slow toward horizontal (Q_TILT_RATE_DN) so the aircraft
-        // builds airspeed before wing lift is needed.
         {
-            float target_tilt_angle = constrain_float(1.0f - inputs.plane.pitch_tilt_demand, 0.0f, 1.0f);
-            float target_tilt_deg   = target_tilt_angle * g_config.forward_flight_physical_angle_deg;
-            float rate_up = std::max(1.0f, inputs.tilt_rate_up_dps);
-            float rate_dn = std::max(1.0f, inputs.tilt_rate_down_dps > 0.0f
-                                          ? inputs.tilt_rate_down_dps
-                                          : inputs.tilt_rate_up_dps);
-            state.current_tilt_deg = constrain_float(target_tilt_deg,
-                state.current_tilt_deg - (rate_up * inputs.dt),   // toward vertical: fast
-                state.current_tilt_deg + (rate_dn * inputs.dt));  // toward horizontal: slow
+            if (inputs.plane.tilt_rate_mode) {
+                // [AV-INVAR:stabilize-tilt-rate-control] — see Avatar_Design.md § 9
+                // Rate control: pitch_tilt_demand [-1..1] is a rate command.
+                // Full stick = tilt_rate_up_dps. Neutral stick = hold position.
+                // Positive demand = toward vertical = decrease current_tilt_deg.
+                float rate = std::max(1.0f, inputs.tilt_rate_up_dps) * inputs.plane.pitch_tilt_demand;
+                state.current_tilt_deg -= rate * inputs.dt;
+                state.current_tilt_deg = constrain_float(state.current_tilt_deg, 0.0f, g_config.forward_flight_physical_angle_deg);
+            } else {
+                // [AV-INVAR:plane-tilt-slew] — see Avatar_Design.md § 9
+                // Position control: nav_pitch_cd (pilot + TECS) sets the target; state.current_tilt_deg
+                // slews toward it — fast toward vertical (stall recovery), slow toward horizontal
+                // (airspeed must build before wing lift is needed).
+                // cruise_norm separates servo physical max from cruise equilibrium angle (§ 4.4.3).
+                // Neutral stick → cruise_physical_angle_deg. Full pitch-down → forward_flight_physical_angle_deg.
+                float cruise_norm = g_config.cruise_physical_angle_deg / fmaxf(g_config.forward_flight_physical_angle_deg, 0.1f);
+                float target_tilt_angle = constrain_float(cruise_norm * (1.0f - inputs.plane.pitch_tilt_demand), 0.0f, 1.0f);
+                float target_tilt_deg   = target_tilt_angle * g_config.forward_flight_physical_angle_deg;
+                float rate_up = std::max(1.0f, inputs.tilt_rate_up_dps);
+                float rate_dn = std::max(1.0f, inputs.tilt_rate_down_dps > 0.0f
+                                              ? inputs.tilt_rate_down_dps
+                                              : inputs.tilt_rate_up_dps);
+                state.current_tilt_deg = constrain_float(target_tilt_deg,
+                    state.current_tilt_deg - (rate_up * inputs.dt),   // toward vertical: fast
+                    state.current_tilt_deg + (rate_dn * inputs.dt));  // toward horizontal: slow
+            }
             outputs.tilt_angle = state.current_tilt_deg / g_config.forward_flight_physical_angle_deg;
         }
 
@@ -111,22 +122,15 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
 
 #if AVATAR_DEBUG_LOG
         {
-            static uint32_t last_b_log_ms = 0;
+            static uint32_t last_avb_ms = 0;
             uint32_t now_ms = AP_HAL::millis();
-            if (now_ms - last_b_log_ms >= 1000) {
-                last_b_log_ms = now_ms;
+            if (now_ms - last_avb_ms >= 1000) {
+                last_avb_ms = now_ms;
                 gcs().send_text(MAV_SEVERITY_INFO,
-                    "AVB elev=%.2f ptilt=%.2f thr=%.2f ipitch=%.2f",
-                    (double)outputs.elevator_out,
+                    "AVB tilt_demand=%.2f tilt_out=%.2f elev=%.2f",
                     (double)inputs.plane.pitch_tilt_demand,
-                    (double)throttle_pct,
-                    (double)inputs.pitch);
-                gcs().send_text(MAV_SEVERITY_INFO,
-                    "AVB tilt=%.2f cos=%.2f yawL=%.2f yawR=%.2f",
                     (double)outputs.tilt_angle,
-                    (double)cos_tilt_b,
-                    (double)outputs.motor_thrust[AVATAR_MOT_YAW_LEFT],
-                    (double)outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT]);
+                    (double)outputs.elevator_out);
             }
         }
 #endif
@@ -176,7 +180,9 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         TVC_CoreState tvc_s = state.get_tvc_state();
         TVC_Outputs tvc_out = tvc_run_main_logic(tvc_in, tvc_s, tvc_config);
 
-        outputs.tilt_angle = tvc_out.pitch_angle_norm;
+        // Cap at cruise_norm so copter mode never commands past horizontal (§ 4.4.3).
+        float cruise_norm_c = g_config.cruise_physical_angle_deg / fmaxf(g_config.forward_flight_physical_angle_deg, 0.1f);
+        outputs.tilt_angle = constrain_float(tvc_out.pitch_angle_norm, -1.0f, cruise_norm_c);
         float throttle_thrust = tvc_out.total_throttle;
         outputs.debug_data = tvc_out.debug_data;
 
@@ -226,40 +232,29 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
 #if AVATAR_DEBUG_LOG
         {
             static uint32_t last_log_ms = 0;
+            static uint32_t last_alert_ms = 0;
             uint32_t now_ms = AP_HAL::millis();
-            if (now_ms - last_log_ms >= 3000) {
+            if (now_ms - last_log_ms >= 1000) {
                 last_log_ms = now_ms;
                 gcs().send_text(MAV_SEVERITY_INFO,
-                    "AV fwd=%.2f thr=%.2f tilt=%.1f roll=%.2f yaw=%.2f gz=%.2f",
+                    "AVC fwd=%.2f tilt=%.1f ptch=%.2f roll=%.2f thr=%.2f",
                     (double)inputs.forward,
-                    (double)throttle_thrust,
-                    (double)state.current_tilt_deg,
+                    (double)outputs.tilt_angle,
+                    (double)inputs.pitch,
                     (double)inputs.roll,
-                    (double)inputs.yaw,
-                    (double)inputs.gyro.z);
-                gcs().send_text(MAV_SEVERITY_INFO,
-                    "AV elev=%.2f rud=%.2f yawL=%.2f yawR=%.2f evL=%.2f evR=%.2f",
-                    (double)outputs.elevator_out,
-                    (double)outputs.rudder_out,
-                    (double)outputs.motor_thrust[AVATAR_MOT_YAW_LEFT],
-                    (double)outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT],
-                    (double)(outputs.elevator_out + outputs.aileron_out),
-                    (double)(outputs.elevator_out - outputs.aileron_out));
+                    (double)inputs.throttle);
+            }
+            if (outputs.tilt_angle > 0.8f && now_ms - last_alert_ms >= 200) {
+                last_alert_ms = now_ms;
+                gcs().send_text(MAV_SEVERITY_WARNING,
+                    "AVC! tilt=%.2f fwd=%.2f tp=%.2f ptch=%.2f",
+                    (double)outputs.tilt_angle,
+                    (double)inputs.forward,
+                    (double)inputs.plane.transition_progress,
+                    (double)inputs.pitch);
             }
         }
 #endif
-    }
-
-    // Apply spin_min floor when airborne so motors never receive DShot 0 mid-flight.
-    // Mirrors what AP_MotorsMulticopter does for standard copters — prevents AM32 stall
-    // protection from triggering on pitch excursions that drive rear_thrust to zero.
-    bool airborne = (inputs.spool_state == AP_Motors::SpoolState::THROTTLE_UNLIMITED ||
-                     inputs.spool_state == AP_Motors::SpoolState::SPOOLING_UP ||
-                     inputs.spool_state == AP_Motors::SpoolState::SPOOLING_DOWN);
-    if (airborne) {
-        for (int i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
-            outputs.motor_thrust[i] = MAX(outputs.motor_thrust[i], inputs.spin_min);
-        }
     }
 
     for (int i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) outputs.motor_thrust[i] = constrain_float(outputs.motor_thrust[i], -1.0f, 1.0f);

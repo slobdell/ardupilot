@@ -61,6 +61,7 @@ struct MixerInputs {
         float aileron_input;
         float transition_progress; // 0.0 (Hover) -> 1.0 (Plane)
         float pitch_tilt_demand;   // Pilot pitch stick -1..1; positive = pitch up = tilt rotors toward vertical
+        bool  tilt_rate_mode;      // true = pitch_tilt_demand is a rate command (STABILIZE); false = position demand (FBWA/auto)
     } plane;
 
     // System Perception

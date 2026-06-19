@@ -61,13 +61,15 @@ def dump_params(mav, verbose=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    from connect import ELRS_PORT
     parser.add_argument('--port', default='/dev/ttyACM0')
     parser.add_argument('--baud', type=int, default=115200)
+    parser.add_argument('--elrs', action='store_true', help=f'Connect via ELRS TX Backpack WiFi ({ELRS_PORT})')
     parser.add_argument('-o', '--output', help='Output .param file (default: stdout)')
     parser.add_argument('-v', '--verbose', action='store_true', help='Show progress')
     args = parser.parse_args()
 
-    mav = connect(args.port, args.baud)
+    mav = connect(args.port, args.baud, elrs=args.elrs)
     print("Dumping parameters...", file=sys.stderr)
     params = dump_params(mav, verbose=args.verbose or bool(args.output))
 

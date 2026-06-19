@@ -37,8 +37,22 @@ Calibration procedure:
 
 Note: in plane mode, setting `Q_TILT_RATE_UP` at or below the real servo speed guarantees math accuracy by construction (the command never races ahead of the servo). `Q_TILT_RATE_DN = 30 °/s` is independent of servo speed and does not need calibration.
 
+**Enable weathervaning in QLOITER** *(Needs Aircraft)*
+QLOITER is now validated. Next step: enable nose-into-wind weathervaning. Two things needed:
+1. Set `custom_weathervane = true` in the Avatar config in `libraries/AP_CustomConfig/AP_CustomConfig.cpp` (currently `false`). The custom weathervane code is in `ArduCopter/mode_loiter.cpp`.
+2. Set the WVANE params (starting values from `Avatar_Design.md § 5.2`):
+```
+WVANE_DIRECTION = 1      # nose into wind
+WVANE_GAIN      = 1.0    # increase for more aggressive response
+WVANE_ANG_MIN   = 1.0    # deadzone in degrees to prevent hunting
+```
+For ArduPlane QLOITER the stock `AC_WeatherVane` path may be sufficient with just the params — verify whether `custom_weathervane` also needs to be wired into the ArduPlane QLOITER path or if it's ArduCopter-only.
+
 **Plane mode stall-prevention validation**
 The stall-prevention loop (elevator saturates → wings tilt upward via TVC pitch compensation) is theoretically sound and bench-verified, but the transition boundary behavior is untested. Tilt slew rate limiting is now implemented and unit-tested ([AV-INVAR:plane-tilt-slew]): releasing the pitch stick takes 3 seconds to reach full forward tilt. This is the highest-uncertainty element of the Avatar design in real flight.
+
+**KFF_RDDRMIX — aileron-rudder coupling on rear motors**
+In plane mode, `k_rudder` is computed as: turn coordinator + `KFF_RDDRMIX * k_aileron` + pilot rudder stick. All three terms flow into the rear motor yaw differential (scaled by `cos_tilt_b`). This means rolling the aircraft also drives differential rear motor thrust via the aileron-rudder mix. At cruise (tilt near horizontal) this is already zeroed out by `cos_tilt_b ≈ 0`. At hover-like tilt (near vertical) it is active. If this coupling proves undesirable in flight — e.g. roll inputs causing unwanted heading changes in slow flight — set `KFF_RDDRMIX = 0` in the Avatar param file. This removes the aileron→yaw coupling from the rear motors while leaving the turn coordinator and pilot rudder stick paths untouched.
 
 **Yaw PID gain tuning — oscillation, needs D term**
 Current flight-tested values (criss-cross thrust geometry, June 2026): `Q_A_ANG_YAW_P=2.0`, `Q_A_RAT_YAW_P=0.03`, `Q_A_RAT_YAW_I=0.01`, `Q_A_RAT_YAW_FF=0.5`, `Q_A_RAT_YAW_D=0`.
@@ -47,8 +61,13 @@ There is still residual oscillation from the differential rear motor thrust. `Q_
 
 Note: when the yaw mechanism is rebuilt with outward-pushing geometry (replacing current criss-cross), swap the `+`/`-` yaw_delta assignment back in `AvatarMixer::mix()` and re-tune from scratch — the gains will not transfer.
 
-**Param hygiene**
-Current parameter files include bench-testing values. Before first flight: audit `Q_A_RAT_*` gains, `SERVO_BLH_*` DShot masks, and arming check flags. Ensure `ARMING_CHECK` is not globally disabled.
+**Param hygiene / restore golden params from aircraft**
+Current parameter files include bench-testing values. Before first flight: audit `Q_A_RAT_*` gains, `SERVO_BLH_*` DShot masks, and arming check flags.
+
+`ARMING_CHECK` is currently set to `0` on the aircraft (disabled for indoor bench testing without GPS). It must be restored to `50` before any flight. Do **not** rely on the param files for this — pull a fresh dump from the aircraft once bench testing is done and commit it as the new golden config:
+```bash
+python3 tools/mavlink/param_dump.py --elrs -v -o params/avatar_t1ranger_micoair.param
+```
 
 **Custom runtime parameters** *(CustomParameters.md)*
 Several tuning constants in `CustomConfig` and `TVC_Core.cpp` require a recompile to change. Plan to migrate them to a proper `AP_CustomParams` subgroup in `ParametersG2`, making them adjustable from any GCS. Full implementation plan, param names, defaults, and call-site migration guide are in `CustomParameters.md`.

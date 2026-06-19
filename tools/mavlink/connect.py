@@ -6,18 +6,23 @@ from pymavlink import mavutil
 
 DEFAULT_PORT = '/dev/ttyACM0'
 DEFAULT_BAUD = 115200
+ELRS_PORT = 'udpin:0.0.0.0:14550'
 
 
 def get_args(description):
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument('--port', default=DEFAULT_PORT, help=f'Serial port (default: {DEFAULT_PORT})')
+    parser.add_argument('--port', default=DEFAULT_PORT, help=f'Serial port or UDP string (default: {DEFAULT_PORT})')
     parser.add_argument('--baud', type=int, default=DEFAULT_BAUD, help=f'Baud rate (default: {DEFAULT_BAUD})')
+    parser.add_argument('--elrs', action='store_true', help=f'Connect via ELRS TX Backpack WiFi ({ELRS_PORT})')
     return parser.parse_args()
 
 
-def connect(port=DEFAULT_PORT, baud=DEFAULT_BAUD, timeout=10):
+def connect(port=DEFAULT_PORT, baud=DEFAULT_BAUD, timeout=10, elrs=False):
     """Open a MAVLink connection and wait for the first heartbeat."""
-    print(f"Connecting to {port} @ {baud}...")
+    if elrs:
+        port = ELRS_PORT
+    is_udp = port.startswith('udp')
+    print(f"Connecting to {port}{'' if is_udp else f' @ {baud}'}...")
     mav = mavutil.mavlink_connection(port, baud=baud)
     print("Waiting for heartbeat (arm/disarm switch must be accessible)...")
     hb = mav.wait_heartbeat(timeout=timeout)

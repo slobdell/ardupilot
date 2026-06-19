@@ -245,10 +245,11 @@ void AP_Motors6DOF::output_min()
 int16_t AP_Motors6DOF::calc_thrust_to_pwm(float thrust_in, bool reversible) const
 {
     if(!reversible) {
-        int16_t minPwm = get_pwm_output_min();
-        if(thrust_in <= 0) return minPwm;
-        float linearized = thr_lin.apply_thrust_curve_and_volt_scaling(thrust_in);
-        return (linearized * (get_pwm_output_max() - minPwm)) + minPwm;
+        if (_spool_state == SpoolState::SHUT_DOWN || _spool_state == SpoolState::GROUND_IDLE) {
+            return get_pwm_output_min();
+        }
+        float actuator = thr_lin.thrust_to_actuator(thrust_in);
+        return get_pwm_output_min() + (get_pwm_output_max() - get_pwm_output_min()) * actuator;
     }
     if(fabsf(thrust_in) <= DEAD_BAND) thrust_in = 0;
     int16_t range_up = get_pwm_output_max() - g_config.mot_spin_neutral;
@@ -356,7 +357,14 @@ void AP_Motors6DOF::output_armed_stabilizing()
     static uint32_t last_dbg_ms = 0;
     uint32_t now_ms = AP_HAL::millis();
     bool should_log = (now_ms - last_dbg_ms > 2000);
-    if (should_log) last_dbg_ms = now_ms;
+    if (should_log) {
+        last_dbg_ms = now_ms;
+        gcs().send_text(MAV_SEVERITY_INFO,
+            "AV6 tp=%.2f fwd=%.2f pcd=%.0f",
+            (double)_plane_inputs.transition_progress,
+            (double)_forward_in,
+            (double)_plane_inputs.pitch_cd);
+    }
 
     float roll_thrust = (_roll_in + _roll_in_ff);
     float pitch_thrust = (_pitch_in + _pitch_in_ff);
@@ -383,6 +391,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
     mixer_in.plane.aileron_input = _plane_inputs.aileron_input;
     mixer_in.plane.transition_progress = _plane_inputs.transition_progress;
     mixer_in.plane.pitch_tilt_demand = _plane_inputs.pitch_tilt_demand;
+    mixer_in.plane.tilt_rate_mode    = _plane_inputs.tilt_rate_mode;
     mixer_in.dt = _dt;
     mixer_in.spool_state = _spool_state;
     mixer_in.is_armed = armed();

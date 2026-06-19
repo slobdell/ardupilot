@@ -31,7 +31,8 @@ struct CustomConfig {
     int enable_tricopter_vtol_backend;
     bool tricopter_is_blimp;
     bool emergency_blimp_manual_mode;
-    float forward_flight_physical_angle_deg;
+    float forward_flight_physical_angle_deg; // Physical servo limit: angle corresponding to SERVO5_MIN
+    float cruise_physical_angle_deg;         // Cruise equilibrium angle (≤ forward_flight_physical_angle_deg)
     float reverse_flight_physical_angle_deg;
     float platform_max_angle_deg;
     float elevator_tilt_handoff_point; // 0.0-1.0: fraction of pitch demand where elevator saturates and motor tilt begins

@@ -52,6 +52,7 @@ public:
         float aileron_input;// Aileron servo input -4500..4500
         float transition_progress; // 0.0 (VTOL) -> 1.0 (Plane)
         float pitch_tilt_demand; // Pilot pitch stick -1..1; positive = pitch up = tilt rotors toward vertical
+        bool  tilt_rate_mode;    // true = pitch_tilt_demand is a rate command (STABILIZE); false = position demand (FBWA/auto)
     };
     
     // Inject Plane state for hybrid control

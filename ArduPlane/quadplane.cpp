@@ -1734,8 +1734,20 @@ void QuadPlane::update(void)
         // Tilt demand: in VTOL modes zero (copter TVC owns pitch); in plane modes
         // normalize nav_pitch_cd so TECS and pilot intent both drive tilt angle.
         // [AV-INVAR:tilt-follows-nav-pitch] — see Avatar_Design.md § 9
-        plane_inputs.pitch_tilt_demand = in_vtol_mode() ? 0.0f :
-            constrain_float(plane.nav_pitch_cd / (plane.aparm.pitch_limit_max * 100.0f), -1.0f, 1.0f);
+        if (in_vtol_mode()) {
+            plane_inputs.pitch_tilt_demand = 0.0f;
+            plane_inputs.tilt_rate_mode    = false;
+        } else if (plane.control_mode == &plane.mode_stabilize) {
+            // [AV-INVAR:stabilize-pitch-decoupled] — see Avatar_Design.md § 9
+            // [AV-INVAR:stabilize-tilt-rate-control] — see Avatar_Design.md § 9
+            plane_inputs.pitch_tilt_demand = constrain_float(
+                plane.channel_pitch->norm_input_dz(), -1.0f, 1.0f);
+            plane_inputs.tilt_rate_mode    = true;
+        } else {
+            plane_inputs.pitch_tilt_demand = constrain_float(
+                plane.nav_pitch_cd / (plane.aparm.pitch_limit_max * 100.0f), -1.0f, 1.0f);
+            plane_inputs.tilt_rate_mode    = false;
+        }
         ((AP_Motors6DOF*)motors)->set_plane_inputs(plane_inputs);
     }
 #endif
@@ -1832,11 +1844,15 @@ void QuadPlane::update(void)
                 attitude_control->rate_bf_pitch_target(pitch_rate_cds);
 
                 // [AV-INVAR:ang-vel-roll-tracking] — see Avatar_Design.md § 9
+                // [AV-INVAR:stabilize-roll-from-stick] — see Avatar_Design.md § 9
                 AC_PID& roll_pid = attitude_control->get_rate_roll_pid();
                 if (i_scale < 1.0f) {
                     roll_pid.set_integrator(roll_pid.get_i() * i_scale);
                 }
-                const float roll_error_rad = radians(plane.nav_roll_cd * 0.01f) - ahrs.get_roll();
+                const float roll_target_rad = (plane.control_mode == &plane.mode_stabilize)
+                    ? radians(plane.channel_roll->norm_input_dz() * plane.roll_limit_cd * 0.01f)
+                    : radians(plane.nav_roll_cd * 0.01f);
+                const float roll_error_rad = roll_target_rad - ahrs.get_roll();
                 const float roll_kP = attitude_control->get_angle_roll_p().kP();
                 const float roll_rate_cds = degrees(roll_kP * roll_error_rad) * 100.0f;
                 attitude_control->rate_bf_roll_target(roll_rate_cds);

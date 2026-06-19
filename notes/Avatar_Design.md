@@ -1,7 +1,7 @@
 # Design Document: Avatar Tilt-Rotor Fixed-Wing Aircraft
 
-**Status:** AvatarMixer implemented and bench-tested on T1 Ranger (MicoAir H743, June 2026)
-**Test Airframe:** Hee-wing T1 Ranger
+**Status:** AvatarMixer implemented and bench-tested on Zoh Altus VTOL (MicoAir H743, June 2026)
+**Test Airframe:** Zoh Altus VTOL
 
 ---
 
@@ -471,7 +471,7 @@ mixer_in.surface_pitch = _pilot_pitch;
 - `AP_Motors6DOF` backend — mixer dispatch, output routing, spool state handling
 - `MixerInputs` / `MixerOutputs` / `MixerState` data contracts
 
-### 6.2 Implemented and Bench-Verified (T1 Ranger, June 2026)
+### 6.2 Implemented and Bench-Verified (Zoh Altus VTOL, June 2026)
 
 **`AvatarMixer::setup_motors()`** — 4 motors: left wing, right wing, right rear yaw, left rear yaw.
 
@@ -496,17 +496,17 @@ mixer_in.surface_pitch = _pilot_pitch;
 
 **Throttle channel encoding** — Avatar maps throttle to `1500..2000` (positive half only), not the full `1000..2000` range. TVC_Core always decodes THRUST_CHANNEL with `sbus_pwm_to_float(..., -1.0f, 1.0f)`, so 1500 → 0.0 and 2000 → 1.0. Using the full range would make zero stick (1000 PWM) look like full reverse thrust to the TVC's `sqrtf` magnitude calculation, producing `total_throttle = 1.0` at both extremes and incorrect tilt angles. Blimp uses the full range because its motors are genuinely bidirectional. This asymmetry is intentional and was validated during testing.
 
-### 6.3 Not Required for T1 Ranger Test
+### 6.3 Not Required for Zoh Altus VTOL Test
 - Rear motor `sin(wing_angle)` formula — rear motor absent on test airframe
-- Spring-lever yaw mechanism — not present on T1 Ranger
+- Spring-lever yaw mechanism — not present on Zoh Altus VTOL
 
 ---
 
-## 7. Test Plan (T1 Ranger)
+## 7. Test Plan (Zoh Altus VTOL)
 
-### 7.1 Servo Output Assignments (T1 Ranger — 8 outputs)
+### 7.1 Servo Output Assignments (Zoh Altus VTOL — 8 outputs)
 
-**T1 Ranger connector labels:**
+**Zoh Altus VTOL connector labels:**
 - `Aux` — tilt servo for the rotating wing motors
 - `Servo` — ailerons
 
@@ -522,15 +522,15 @@ mixer_in.surface_pitch = _pilot_pitch;
 | 8 | V-tail left | Scripting5 | `SERVO8_FUNCTION = 98` | `elevator_out + rudder_out` |
 | 9 | V-tail right | Scripting6 | `SERVO9_FUNCTION = 99` | `elevator_out - rudder_out` |
 
-**Confirmed servo reversals (T1 Ranger):**
+**Confirmed servo reversals (Zoh Altus VTOL):**
 
 | Parameter | Value | Reason |
 |-----------|-------|--------|
 | `SERVO5_REVERSED` | 1 | Tilt servo physical orientation |
-| `SERVO7_REVERSED` | 1 | T1 Ranger right elevon servo is factory-reversed |
+| `SERVO7_REVERSED` | 1 | Right elevon servo is factory-reversed |
 | `SERVO9_REVERSED` | 1 | Right V-tail servo physical orientation |
 
-**Tilt servo calibration (SERVO5, MicoAir H743 + T1 Ranger):**
+**Tilt servo calibration (SERVO5, MicoAir H743 + Zoh Altus VTOL):**
 
 The tilt servo uses `set_output_norm` via the Scripting2 channel, which uses `pwm_from_angle` (asymmetric TRIM-based mapping). With `SERVO5_REVERSED = 1`:
 
@@ -548,14 +548,14 @@ SERVO5_MAX  = 2025
 Q_TILT_RATE_UP = <measured>   (physical slew rate of tilt mechanism in deg/s — see [AV-INVAR:tilt-servo-tracking])
 ```
 
-`Q_TILT_RATE_UP` is **not a tuning knob** — it must equal the measured physical slew rate of the tilt mechanism (wings vertical to horizontal). Calibrate: command a full-range tilt and time it, then set `Q_TILT_RATE_UP = 90 / seconds`. The 90° avatar range means this value will be proportionally higher than the blimp's equivalent. The default of 40 °/s has not been measured against the T1 Ranger and should be treated as uncalibrated.
+`Q_TILT_RATE_UP` is **not a tuning knob** — it must equal the measured physical slew rate of the tilt mechanism (wings vertical to horizontal). Calibrate: command a full-range tilt and time it, then set `Q_TILT_RATE_UP = 90 / seconds`. The 90° avatar range means this value will be proportionally higher than the blimp's equivalent.
 
 **All surface outputs use Scripting channels** (Scripting2–6). This is deliberate — ArduPlane's own mixing pipeline (`stabilize_roll`, `stabilize_pitch`, elevon mixer, vtail mixer) runs in QSTABILIZE and writes to named channels like `k_aileron` and `k_vtail_left`. Using Scripting channels fully isolates our outputs from ArduPlane's mixer. Never assign these servos to `k_aileron`, `k_elevator`, `k_rudder`, `k_vtail_left`, or `k_vtail_right`.
 
 The aileron surfaces (Scripting3/4) carry pure differential roll — no elevator component. The V-tail surfaces (Scripting5/6) carry elevator and rudder authority. Both are computed in `AP_Motors6DOF::output_to_motors()` in `libraries/AP_Motors/AP_Motors6DOF.cpp`.
 
 ### 7.2 ArduPilot Configuration
-Configure the T1 Ranger as a **QuadPlane**. This is primarily to access copter (Q) modes for testing the mixer logic. The production intent is that plane mode works at all times, but copter mode provides a controlled environment to validate motor mixing before full-plane testing.
+Configure the Zoh Altus VTOL as a **QuadPlane**. This is primarily to access copter (Q) modes for testing the mixer logic. The production intent is that plane mode works at all times, but copter mode provides a controlled environment to validate motor mixing before full-plane testing.
 
 ### 7.2 Base Test Case: Copter Mode Forward Flight
 1. Arm in a Q-mode (e.g., QHOVER or QSTABILIZE)
@@ -572,7 +572,7 @@ This validates the core 6DOF thrust-vector concept without relying on aerodynami
 3. Observe that as elevator saturates, wings tilt upward automatically
 4. Confirm aircraft recovers rather than stalling
 
-**Bench-verified (T1 Ranger, June 2026):**
+**Bench-verified (Zoh Altus VTOL, June 2026):**
 - Roll authority via differential wing motor thrust ✓
 - Yaw authority via dual rear motor differential + V-tail rudder ✓
 - Aileron mixing (elevons) responds correctly to roll stick ✓
@@ -588,7 +588,7 @@ This validates the core 6DOF thrust-vector concept without relying on aerodynami
 
 ## 8. Production Aircraft Design
 
-The T1 Ranger is a test platform to validate the Avatar control architecture. The production aircraft is a purpose-built design derived from the lessons of the T1 Ranger program. This section captures the production design intent for future implementation.
+The Zoh Altus VTOL is a test platform to validate the Avatar control architecture. The production aircraft is a purpose-built design derived from the lessons of the Zoh Altus program. This section captures the production design intent for future implementation.
 
 ### 8.1 Mission Profile
 
@@ -699,13 +699,13 @@ These are non-obvious decisions that look wrong without context and are therefor
 
 ### [AV-INVAR:ang-vel-roll-tracking]
 
-**What:** In FBWA plane mode, `_ang_vel_body.x` (roll rate target) is written directly via `rate_bf_roll_target()`, targeting `nav_roll_cd` (the ArduPlane commanded bank angle) rather than always targeting 0°.
+**What:** In plane modes, `_ang_vel_body.x` (roll rate target) is written directly via `rate_bf_roll_target()`, targeting a commanded bank angle rather than always targeting 0°. In FBWA/auto that source is `nav_roll_cd`; in STABILIZE it is the pilot stick directly — see `[AV-INVAR:stabilize-roll-from-stick]`.
 
 **Where:** `ArduPlane/quadplane.cpp` — Avatar FBWA block. `AC_AttitudeControl/AC_AttitudeControl.h` — `rate_bf_roll_target()` setter.
 
-**Why:** Without an explicit roll rate target, `_ang_vel_body.x` is stale from the last copter mode operation. The roll rate PID then fires on a meaningless target, producing noise in `inputs.roll` which the mixer applies to the wing motor differential. By targeting `nav_roll_cd`, the copter roll controller and the ArduPlane roll PID (ailerons) cooperate — both command the same bank angle. In FBWA hover `nav_roll_cd = 0°` so both target level. In banked turns, both follow the same commanded bank. The `cos_tilt_b` scaling in the mixer fades motor roll authority to zero at wings-horizontal, so there is no fighting in cruise regardless.
+**Why:** Without an explicit roll rate target, `_ang_vel_body.x` is stale from the last copter mode operation. The roll rate PID then fires on a meaningless target, producing noise in `inputs.roll` which the mixer applies to the wing motor differential. By targeting the commanded bank angle, the copter roll controller and the ArduPlane roll PID (ailerons) cooperate — both command the same bank. The `cos_tilt_b` scaling in the mixer fades motor roll authority to zero at wings-horizontal, so there is no fighting in cruise regardless.
 
-**Targeting `nav_roll_cd` not `0°` is load-bearing.** If changed to always target 0°, the copter roll controller will fight any bank angle commanded by ArduPlane's roll PID during intermediate tilt angles.
+**Targeting the commanded bank angle not `0°` is load-bearing.** If changed to always target 0°, the copter roll controller will fight any bank angle commanded by ArduPlane's roll PID during intermediate tilt angles.
 
 ---
 
@@ -717,19 +717,61 @@ These are non-obvious decisions that look wrong without context and are therefor
 
 **Why:** `nav_pitch_cd` captures both pilot intent (FBWA stick → pitch demand) and any autonomous system modifications (TECS stall recovery, navigation). Routing it to tilt means the wings tilt toward vertical when energy management demands more lift — the Avatar equivalent of a conventional aircraft pitching up. The elevator does NOT receive `nav_pitch_cd`; it is driven by `[AV-INVAR:elevator-follows-pitch-pid]` instead. The ArduPlane pitch PID still runs and computes `elevator_input`, but that output is ignored by the mixer.
 
-**Do not revert to `channel_pitch->norm_input()`** — that discards TECS's autonomous pitch demand and breaks stall prevention in plane mode.
+**Do not revert to `channel_pitch->norm_input()`** — that discards TECS's autonomous pitch demand and breaks stall prevention in plane mode. Exception: STABILIZE mode, where `nav_pitch_cd` is always 0 — see `[AV-INVAR:stabilize-pitch-decoupled]`.
 
 ---
 
 ### [AV-INVAR:elevator-follows-pitch-pid]
 
-**What:** In FBWA plane mode, `elevator_out` is driven by `inputs.pitch` (the copter attitude controller PID output), not by `inputs.plane.elevator_input` (the ArduPlane pitch PID output).
+**What:** In all plane modes (FBWA, STABILIZE, …), `elevator_out` is driven by `inputs.pitch` (the copter attitude controller PID output), not by `inputs.plane.elevator_input` (the ArduPlane pitch PID output). In STABILIZE the elevator stick mixing that would otherwise override this is also suppressed — see `[AV-INVAR:stabilize-pitch-decoupled]`.
 
 **Where:** `ArduPlane/AP_Motors/AP_Motors6DOF_AvatarMixer.cpp` — plane mode block. `outputs.elevator_out = inputs.pitch`.
 
 **Why:** The elevator's job is to hold the fuselage level — the same job as the rear motor. `inputs.pitch` is generated by the copter attitude controller targeting `0° - actual_pitch` (see `[AV-INVAR:ang-vel-pitch-bypass]`). Using the same signal for both the elevator and the rear motor means both actuators cooperate on the same error signal. `inputs.plane.elevator_input` (ArduPlane pitch PID) is discarded because that PID targets `nav_pitch_cd`, which now drives tilt angle (see `[AV-INVAR:tilt-follows-nav-pitch]`) — if `elevator_input` were used, the elevator would try to pitch the nose to match the tilt demand, which is wrong.
 
 **Gain note:** `inputs.pitch` is scaled as a motor thrust fraction (typically ±0.2 for moderate errors). This may produce smaller elevator deflections than the ArduPlane PID did. Tune with a gain multiplier if elevator authority is insufficient in flight.
+
+---
+
+### [AV-INVAR:stabilize-pitch-decoupled]
+
+**What:** In STABILIZE mode, (a) `pitch_tilt_demand` is sourced from the pilot stick (`channel_pitch->norm_input_dz()`) rather than `nav_pitch_cd`, and (b) the elevator stick mixing in `stabilize_stick_mixing_direct()` is suppressed. The result is identical pitch architecture to FBWA: pilot pitch drives TVC tilt only, elevator holds level via the copter attitude PID.
+
+**Where:** Two locations:
+1. `ArduPlane/quadplane.cpp` — PlaneInputs injection block: STABILIZE branch uses `norm_input_dz()` instead of `nav_pitch_cd / pitch_limit_max`.
+2. `ArduPlane/Attitude.cpp` — `ModeStabilize::stabilize_stick_mixing_direct()`: the elevator pitch mixing block is compiled out under `#if !(ENABLE_TRICOPTER_VTOL_BACKEND && ACTIVE_CONFIG == CONFIG_TYPE_AVATAR)`.
+
+**Why:** STABILIZE always resets `nav_pitch_cd = 0` each loop (it holds current attitude and applies pilot stick directly to servo outputs via `stabilize_stick_mixing_direct()`). That means `[AV-INVAR:tilt-follows-nav-pitch]`'s `nav_pitch_cd` path always produces `pitch_tilt_demand = 0` in STABILIZE — the TVC would never move. `norm_input_dz()` carries the correct sign (positive = nose-up = more vertical tilt) and the same [-1, 1] range as `nav_pitch_cd / pitch_limit_max` at full stick in FBWA.
+
+The elevator mixing suppression is required because `stabilize_stick_mixing_direct()` would otherwise add pilot pitch on top of the copter attitude PID elevator output — fighting the level-hold. Without suppression, STABILIZE would have partial pilot pitch authority on the elevator, which is wrong for Avatar (pilot pitch goes to TVC only).
+
+**Do not remove the elevator mixing guard** without also providing an alternative pitch authority path — STABILIZE without direct elevator mixing relies entirely on TVC for pilot pitch input.
+
+---
+
+### [AV-INVAR:stabilize-tilt-rate-control]
+
+**What:** In STABILIZE mode, `pitch_tilt_demand` is interpreted as a *rate command* rather than a position target. Neutral stick holds the current tilt angle; full stick deflection moves the servo at `Q_TILT_RATE_UP` (the physical servo speed). `Q_TILT_RATE_DN` is ignored — the pilot decides the downward rate.
+
+**Where:** `AP_Motors6DOF_AvatarMixer.cpp` — plane mode tilt block, `tilt_rate_mode` branch. Enabled via `PlaneInputs::tilt_rate_mode = true`, set in `ArduPlane/quadplane.cpp` when `control_mode == mode_stabilize`.
+
+**Why:** Position control (FBWA) snaps the tilt angle to a value proportional to stick position — releasing the stick always commands a fixed angle. This is wrong for a VTOL aircraft where the pilot wants to park the rotors at an arbitrary angle and hold it there. Rate control lets the pilot adjust tilt incrementally and release to freeze it. `Q_TILT_RATE_UP` is the correct rate ceiling because it is calibrated to the physical servo speed — 100% stick = maximum the servo can physically move. `Q_TILT_RATE_DN` was chosen to pace the hover→cruise airspeed transition in FBWA and has no meaning here.
+
+**Sign convention:** positive `pitch_tilt_demand` = toward vertical = decreases `state.current_tilt_deg` (0° = vertical, 90° = horizontal). This matches the sign convention of `[AV-INVAR:tilt-follows-nav-pitch]`.
+
+**Servo limits:** `state.current_tilt_deg` is clamped to `[0, forward_flight_physical_angle_deg]`. When the past-horizontal servo range is extended (see § 4.4.2), lower the floor to `-reverse_flight_physical_angle_deg`.
+
+---
+
+### [AV-INVAR:stabilize-roll-from-stick]
+
+**What:** In STABILIZE mode, the copter roll PID targets `channel_roll->norm_input_dz() * roll_limit_cd` (pilot stick as a bank angle command) rather than `nav_roll_cd` (which is always 0 in STABILIZE). This gives the wing motors roll authority that tracks the pilot's stick, matching FBWA motor behaviour.
+
+**Where:** `ArduPlane/quadplane.cpp` — Avatar FBWA block, `roll_target_rad` computation. Conditional on `control_mode == &mode_stabilize`.
+
+**Why:** STABILIZE always resets `nav_roll_cd = 0` each loop. Without this fix, `roll_error_rad = (0 - actual_roll)` — the motors fight any bank angle rather than following the pilot. The aileron surface does receive pilot roll via `stabilize_stick_mixing_direct()`, so without this fix the surface and motors work against each other during a banked input. Using `norm_input_dz() * roll_limit_cd` maps full stick to the same maximum bank angle that FBWA would command, keeping gains consistent between modes.
+
+**Do not use a rate command here** (unlike `[AV-INVAR:stabilize-tilt-rate-control]`). Roll is an angle-tracked axis — the copter attitude PID expects a bank angle target, not a rate. Feeding a rate would require integrating stick input externally and bypasses the PID's integral wind-up protection.
 
 ---
 

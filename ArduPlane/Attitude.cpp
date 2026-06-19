@@ -263,9 +263,12 @@ void ModeStabilize::stabilize_stick_mixing_direct()
     aileron = plane.channel_roll->stick_mixing(aileron);
     SRV_Channels::set_output_scaled(SRV_Channel::k_aileron, aileron);
 
+#if !(ENABLE_TRICOPTER_VTOL_BACKEND && (ACTIVE_CONFIG == CONFIG_TYPE_AVATAR))
+    // [AV-INVAR:stabilize-pitch-decoupled] — see Avatar_Design.md § 9
     float elevator = SRV_Channels::get_output_scaled(SRV_Channel::k_elevator);
     elevator = plane.channel_pitch->stick_mixing(elevator);
     SRV_Channels::set_output_scaled(SRV_Channel::k_elevator, elevator);
+#endif
 }
 
 /*
