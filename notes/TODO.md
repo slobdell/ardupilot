@@ -54,10 +54,15 @@ The stall-prevention loop (elevator saturates → wings tilt upward via TVC pitc
 **KFF_RDDRMIX — aileron-rudder coupling on rear motors**
 In plane mode, `k_rudder` is computed as: turn coordinator + `KFF_RDDRMIX * k_aileron` + pilot rudder stick. All three terms flow into the rear motor yaw differential (scaled by `cos_tilt_b`). This means rolling the aircraft also drives differential rear motor thrust via the aileron-rudder mix. At cruise (tilt near horizontal) this is already zeroed out by `cos_tilt_b ≈ 0`. At hover-like tilt (near vertical) it is active. If this coupling proves undesirable in flight — e.g. roll inputs causing unwanted heading changes in slow flight — set `KFF_RDDRMIX = 0` in the Avatar param file. This removes the aileron→yaw coupling from the rear motors while leaving the turn coordinator and pilot rudder stick paths untouched.
 
-**Yaw PID gain tuning — oscillation, needs D term**
-Current flight-tested values (criss-cross thrust geometry, June 2026): `Q_A_ANG_YAW_P=2.0`, `Q_A_RAT_YAW_P=0.03`, `Q_A_RAT_YAW_I=0.01`, `Q_A_RAT_YAW_FF=0.5`, `Q_A_RAT_YAW_D=0`.
+**Yaw PID gain tuning — minor low-frequency oscillation**
+Current flight-tested values (criss-cross thrust geometry, June 2026): `Q_A_ANG_YAW_P=2.0`, `Q_A_RAT_YAW_P=0.2`, `Q_A_RAT_YAW_I=0.005`, `Q_A_RAT_YAW_FF=0.35`, `Q_A_RAT_YAW_D=0.006`.
 
-There is still residual oscillation from the differential rear motor thrust. `Q_A_RAT_YAW_D` is currently zero and is the next lever to try — add D in small increments (start at 0.001) to damp the oscillation without reintroducing instability. Do not increase P or ANG_YAW_P until D is explored; the oscillation is likely underdamped rather than undergained.
+Residual low-frequency oscillation observed in flight — goes away on its own, consistent with I-term windup. D is already set to 0.006. Next levers to try, in order:
+1. Reduce I: `Q_A_RAT_YAW_I` from 0.005 → 0.0025
+2. Increase D: `Q_A_RAT_YAW_D` from 0.006 → 0.008–0.010 (watch for motor buzz)
+3. Reduce P: `Q_A_RAT_YAW_P` from 0.2 → 0.15
+
+Do not change multiple values at once. The oscillation is minor and low-priority relative to plane mode issues.
 
 Note: when the yaw mechanism is rebuilt with outward-pushing geometry (replacing current criss-cross), swap the `+`/`-` yaw_delta assignment back in `AvatarMixer::mix()` and re-tune from scratch — the gains will not transfer.
 

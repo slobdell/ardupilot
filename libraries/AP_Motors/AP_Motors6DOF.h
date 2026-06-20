@@ -53,6 +53,7 @@ public:
         float transition_progress; // 0.0 (VTOL) -> 1.0 (Plane)
         float pitch_tilt_demand; // Pilot pitch stick -1..1; positive = pitch up = tilt rotors toward vertical
         bool  tilt_rate_mode;    // true = pitch_tilt_demand is a rate command (STABILIZE); false = position demand (FBWA/auto)
+        float damp_vert_thrust = 0.0f;  // [AV-INVAR:sink-damp] vertical thrust addition (0..1 scale); mixer decomposes into tilt-back + throttle boost
     };
     
     // Inject Plane state for hybrid control

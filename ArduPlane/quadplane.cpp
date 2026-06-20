@@ -553,7 +553,15 @@ const AP_Param::GroupInfo QuadPlane::var_info2[] = {
     // @Increment: 1
     // @User: Standard
     AP_GROUPINFO("APPROACH_DIST", 39, QuadPlane, approach_distance, 0),
-    
+
+    // @Param: DAMP_VERT
+    // @DisplayName: Vertical sink rate dampening gain
+    // @Description: Gain for vertical thrust dampening in STABILIZE plane mode. When the aircraft develops a sink rate, adds (gain x sink_rate_m_s) to the vertical thrust component. The mixer decomposes this into an automatic tilt-back toward vertical and a throttle increase. At default 0.15, a 2 m/s sink rate adds 0.30 vertical thrust units. 0.0 disables. Values above 0.25 will produce aggressive intervention at modest sink rates.
+    // @Range: 0.0 0.3
+    // @Increment: 0.01
+    // @User: Standard
+    AP_GROUPINFO("DAMP_VERT", 41, QuadPlane, damp_vert_gain, 0.15f),
+
     AP_GROUPEND
 };
 
@@ -1716,14 +1724,38 @@ void QuadPlane::update(void)
     motors->set_interlock(!SRV_Channels::get_emergency_stop());
 
 #if ENABLE_TRICOPTER_VTOL_BACKEND
+    // [AV-INVAR:sink-damp] — see Avatar_Design.md § 9
+    float avatar_sink_rate = 0.0f;
+    if (!in_vtol_mode() && (plane.control_mode == &plane.mode_stabilize)) {
+        const float tilt_deg = ((AP_Motors6DOF*)motors)->get_tilt_deg();
+        if (tilt_deg < g_config.cruise_physical_angle_deg) {
+            avatar_sink_rate = fmaxf(0.0f, -inertial_nav.get_velocity_z_up_cms() * 0.01f);
+        }
+    }
+#endif
+
+#if ENABLE_TRICOPTER_VTOL_BACKEND
     // Inject Plane Demands for Unified Mixing (Run Unconditionally)
     {
         AP_Motors6DOF::PlaneInputs plane_inputs;
         plane_inputs.pitch_cd = plane.nav_pitch_cd;
         plane_inputs.roll_cd = plane.nav_roll_cd;
-        
+
         // We must calculate throttle percent manually since we are running before servos_output
-        plane_inputs.throttle_pct = SRV_Channels::get_output_scaled(SRV_Channel::k_throttle);
+        float throttle_pct = SRV_Channels::get_output_scaled(SRV_Channel::k_throttle);
+        // [AV-INVAR:min-thr-tilt] — see Avatar_Design.md § 9
+        if (plane.is_flying() && !g_config.tricopter_is_blimp) {
+            const float tilt_deg = ((AP_Motors6DOF*)motors)->get_tilt_deg();
+            const float cos_tilt = fmaxf(0.0f, cosf(radians(tilt_deg)));
+            const float spin_min = ((AP_Motors6DOF*)motors)->thr_lin.get_spin_min();
+            const float min_thr  = (spin_min * cos_tilt) * 100.0f;
+            if (throttle_pct < min_thr) {
+                throttle_pct = min_thr;
+            }
+        }
+        plane_inputs.throttle_pct = throttle_pct;
+        // [AV-INVAR:sink-damp] — see Avatar_Design.md § 9
+        plane_inputs.damp_vert_thrust = avatar_sink_rate * damp_vert_gain;
         
         plane_inputs.rudder_input = SRV_Channels::get_output_scaled(SRV_Channel::k_rudder);
         plane_inputs.aileron_input = SRV_Channels::get_output_scaled(SRV_Channel::k_aileron);

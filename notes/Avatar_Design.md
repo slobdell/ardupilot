@@ -819,6 +819,40 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 ---
 
+### [AV-INVAR:sink-damp]
+
+**What:** When the aircraft develops a sink rate in STABILIZE plane mode, a vertical thrust demand `damp_vert = v_z × Q_DAMP_VERT` is injected into the AvatarMixer via `PlaneInputs::damp_vert_thrust`. The mixer decomposes the current thrust vector into horizontal and vertical components, adds `damp_vert` to the vertical axis, and recomposes to derive a new tilt angle and new total throttle. This naturally tilts the rotors back toward vertical AND increases throttle in the physically correct ratio — no special-casing for tilt angle. Disabled when `tilt_deg ≥ cruise_physical_angle_deg` (pilot deliberately tilting past horizontal for descent).
+
+**Where:** Two locations:
+1. `ArduPlane/quadplane.cpp` — computes `avatar_sink_rate` from `inertial_nav.get_velocity_z_up_cms()` (gated to STABILIZE + tilt < 90°), sets `plane_inputs.damp_vert_thrust = avatar_sink_rate × damp_vert_gain`. Single parameter `Q_DAMP_VERT` (default 0.15, range 0–0.3).
+2. `libraries/AP_Motors/AP_Motors6DOF_AvatarMixer.cpp` — plane mode block, after tilt integration, before motor output. Decomposes `(throttle × sin_tilt, throttle × cos_tilt + damp_vert)`, computes `new_tilt = atan2(horiz, vert)` and `new_throttle = sqrt(horiz² + vert²)`. Tilt-back is rate-capped to `Q_TILT_RATE_UP × dt` per loop so the servo is never commanded faster than it can physically travel.
+
+**Why force-vector decomposition instead of separate tilt and throttle parameters:** A raw throttle boost is ineffective at near-horizontal tilt — adding throttle mostly produces forward thrust when `cos(tilt) ≈ 0`. The decomposition is correct at all tilt angles: at 80° forward, `atan2` returns a new angle much closer to vertical, which triples or quadruples the vertical component of existing thrust without consuming all available throttle headroom on forward thrust. One parameter controls intervention intensity across the full tilt range.
+
+**Why P-only (no I, no D):** I-term would accumulate altitude debt during a descent and fight the pilot at touchdown. D-term differentiates noisy EKF velocity, producing throttle flutter.
+
+**Why gate at `cruise_physical_angle_deg`:** When rotors are tilted past 90°, the pilot is deliberately commanding descent via tilt (see § 4.4.3). Dampening would fight that intent.
+
+**Do not revert to separate tilt-dampening and throttle-boost parameters.** The decomposition is more correct at near-horizontal tilt angles, which is precisely where the documented crash scenarios occurred. The `fmaxf(cos_tilt, floor)` floor required by the old throttle-boost formula was a symptom of the formula being wrong in that regime.
+
+---
+
+### [AV-INVAR:min-thr-tilt]
+
+**What:** In plane modes, `plane_inputs.throttle_pct` is floored by `(Q_M_SPIN_MIN × cos(tilt_deg)) × 100`. At vertical (0°) the floor is `Q_M_SPIN_MIN` (~15%); at horizontal (90°) the floor is 0% (normal glide allowed); intermediate angles blend smoothly via cosine.
+
+**Where:** `ArduPlane/quadplane.cpp` — plane_inputs block, immediately before the `throttle_pct` assignment. Gated by `plane.is_flying() && !g_config.tricopter_is_blimp`.
+
+**Why:** In CRUISE/FBWB, TECS manages altitude and can command 0% throttle during a descent while rotors are vertical. With vertical rotors there is zero aerodynamic lift — motor thrust is the only thing keeping the aircraft up. ESCs take 1–2 seconds to spool back from zero, making re-throttle recovery a crash scenario. The floor prevents this while still allowing full glide in forward flight (cos(90°) = 0).
+
+**Why not spool state gating:** `motors->get_spool_state()` is always `THROTTLE_UNLIMITED` in plane modes when armed — the motor controller is forced to that state unconditionally to accept continuous mixing commands. Spool state is useless as a gate here.
+
+**Why `plane.is_flying()`:** Prevents the 15% floor from spinning up motors on the ground when armed. ArduPlane's probabilistic flying estimator decays back to false after touchdown, allowing motors to spin down safely.
+
+**Do not apply this to blimps (`tricopter_is_blimp`):** A lighter-than-air vehicle has buoyancy and does not need a minimum vertical thrust floor to stay airborne.
+
+---
+
 ### [AV-INVAR:plane-tilt-slew]
 
 **What:** In FBWA plane mode, `outputs.tilt_angle` (the servo command) is rate-limited before being written. The target is computed from `nav_pitch_cd` (pilot stick + TECS) as normal, but `state.current_tilt_deg` slews toward it at an asymmetric rate: fast toward vertical (Q_TILT_RATE_UP, servo physical speed) and slow toward horizontal (Q_TILT_RATE_DN, an independent design choice). `outputs.tilt_angle` is then derived from the slewed `state.current_tilt_deg`, so all downstream calculations (`tilt_deg_b`, `cos_tilt_b`, roll differential, rear motor) use the commanded position.

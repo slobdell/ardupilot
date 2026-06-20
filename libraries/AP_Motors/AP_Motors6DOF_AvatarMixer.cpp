@@ -67,8 +67,7 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
             if (inputs.plane.tilt_rate_mode) {
                 // [AV-INVAR:stabilize-tilt-rate-control] — see Avatar_Design.md § 9
                 // Rate control: pitch_tilt_demand [-1..1] is a rate command.
-                // Full stick = tilt_rate_up_dps. Neutral stick = hold position.
-                // Positive demand = toward vertical = decrease current_tilt_deg.
+                // Full stick = tilt_rate_up_dps (Q_TILT_RATE_UP). Neutral stick = hold position.
                 float rate = std::max(1.0f, inputs.tilt_rate_up_dps) * inputs.plane.pitch_tilt_demand;
                 state.current_tilt_deg -= rate * inputs.dt;
                 state.current_tilt_deg = constrain_float(state.current_tilt_deg, 0.0f, g_config.forward_flight_physical_angle_deg);
@@ -99,6 +98,36 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         outputs.elevator_out = inputs.pitch;
 
         float throttle_pct = inputs.plane.throttle_pct * 0.01f;
+
+        // [AV-INVAR:sink-damp] — see Avatar_Design.md § 9
+        // Force-vector decomposition: add a vertical thrust demand, then recompose to derive
+        // a new tilt angle (tilted back toward vertical) and new total throttle magnitude.
+        // This is more effective than a raw throttle boost at near-horizontal tilt because
+        // tilt-back exponentially increases the vertical component of existing thrust.
+        // Rate-capped to Q_TILT_RATE_UP so the servo is never commanded faster than it can move.
+        if (inputs.plane.damp_vert_thrust > 0.0f) {
+            float sin_t = sinf(radians(state.current_tilt_deg));
+            float cos_t = cosf(radians(state.current_tilt_deg));
+            float thrust_horiz = throttle_pct * sin_t;
+            float thrust_vert  = throttle_pct * cos_t + inputs.plane.damp_vert_thrust;
+            float new_throttle = sqrtf(thrust_horiz * thrust_horiz + thrust_vert * thrust_vert);
+            float new_tilt_deg;
+            if (new_throttle > 1.0f) {
+                // Saturated: preserve vertical, sacrifice forward thrust for remaining headroom
+                float vert_clamped = fminf(thrust_vert, 1.0f);
+                float horiz_remaining = sqrtf(fmaxf(0.0f, 1.0f - vert_clamped * vert_clamped));
+                new_tilt_deg = degrees(atan2f(horiz_remaining, vert_clamped));
+                throttle_pct = 1.0f;
+            } else {
+                new_tilt_deg = degrees(atan2f(thrust_horiz, thrust_vert));
+                throttle_pct = new_throttle;
+            }
+            new_tilt_deg = constrain_float(new_tilt_deg, 0.0f, g_config.forward_flight_physical_angle_deg);
+            float max_tilt_back = inputs.tilt_rate_up_dps * inputs.dt;
+            state.current_tilt_deg -= constrain_float(state.current_tilt_deg - new_tilt_deg, 0.0f, max_tilt_back);
+            outputs.tilt_angle = state.current_tilt_deg / g_config.forward_flight_physical_angle_deg;
+        }
+
         // cos(tilt): 1 at wings-vertical (hover), 0 at wings-horizontal (cruise).
         // Scales both motor roll differential and rear motor — authority fades as
         // aerodynamic surfaces (ailerons, elevator) take over through the transition.
@@ -192,6 +221,13 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // Motor mixing (cos_tilt, roll authority, rear motor) and throttle scaling all use
         // the physical position so they remain correct while the servo is still travelling.
         float tilt_rate = std::max(1.0f, inputs.tilt_rate_up_dps);
+        // NOTE: outputs.tilt_angle (servo command) is capped at cruise_norm_c (90°) above, but
+        // target_deg here is the raw TVC target and can exceed cruise_physical_angle_deg if the
+        // TVC saturates (extreme forward stick + nose-up). If that happens, state.current_tilt_deg
+        // drifts past 90° while the servo stays at 90°. On a copter→plane mode switch, plane mode
+        // derives its servo command from state.current_tilt_deg, so it would command slightly past
+        // horizontal — a small forward jerk. Fix if it matters: cap target_deg at
+        // g_config.cruise_physical_angle_deg before the constrain below.
         float target_deg = tvc_out.debug_data.target_pitch_deg;
         state.current_tilt_deg = constrain_float(target_deg,
             state.current_tilt_deg - (tilt_rate * inputs.dt),

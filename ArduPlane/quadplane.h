@@ -616,6 +616,9 @@ private:
     // minimum distance to be from destination to use approach logic
     AP_Float approach_distance;
 
+    // [AV-INVAR:sink-damp] — see Avatar_Design.md § 9
+    AP_Float damp_vert_gain;
+
     AP_Float takeoff_failure_scalar;
     AP_Float maximum_takeoff_airspeed;
     uint32_t takeoff_start_time_ms;
