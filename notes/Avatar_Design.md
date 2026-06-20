@@ -775,6 +775,20 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 ---
 
+### [AV-INVAR:stabilize-yaw-pid]
+
+**What:** In STABILIZE plane mode, the pilot's rudder stick is converted to a yaw rate demand (via `get_pilot_input_yaw_rate_cds()`, which applies expo and `Q_YAW_RATE_MAX` scaling) and written to the copter attitude controller via `rate_bf_yaw_target()`. The mixer plane branch then uses `inputs.yaw` (the PID output) for motor differential and rudder surface — identical to the copter mode path.
+
+**Where:** Two locations:
+1. `ArduPlane/quadplane.cpp` — Avatar FBWA block, after `rate_bf_roll_target()`.
+2. `libraries/AP_Motors/AP_Motors6DOF_AvatarMixer.cpp` — plane branch, `yaw_delta_b` and `rudder_out` assignment.
+
+**Why:** The original plane branch used `rudder_input / 4500` (raw stick, open-loop). This gave noticeably weaker and inconsistent yaw authority compared to copter mode because there was no PID stabilization, no I-term heading hold when stick is centered, and no expo. Routing through `rate_bf_yaw_target()` gives STABILIZE the same `Q_A_RAT_YAW_*` PIDs as QSTABILIZE/QLOITER.
+
+**Do not revert to `rudder_input / 4500`** in the plane branch — that discards the PID and produces open-loop yaw with no heading hold.
+
+---
+
 ### [AV-INVAR:transition-skip]
 
 **What:** `transition->force_transition_complete()` is called instead of `transition->update()` in FBWA plane mode for Avatar. The Blimp calls `transition->update()` and is unaffected by this invariant.

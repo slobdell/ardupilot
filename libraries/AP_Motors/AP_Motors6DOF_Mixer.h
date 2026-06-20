@@ -62,6 +62,7 @@ struct MixerInputs {
         float transition_progress; // 0.0 (Hover) -> 1.0 (Plane)
         float pitch_tilt_demand;   // Pilot pitch stick -1..1; positive = pitch up = tilt rotors toward vertical
         bool  tilt_rate_mode;      // true = pitch_tilt_demand is a rate command (STABILIZE); false = position demand (FBWA/auto)
+        bool  use_pid_yaw;         // [AV-INVAR:stabilize-yaw-pid] true = use inputs.yaw (copter PID); false = use rudder_input (raw stick)
         float damp_vert_thrust;    // [AV-INVAR:sink-damp] vertical thrust addition (0..1 scale); mixer decomposes into tilt-back + throttle boost
     } plane;
 
@@ -111,6 +112,7 @@ struct MixerOutputs {
 // --- Persistent State ---
 struct MixerState {
     float current_tilt_deg;
+    float pilot_tilt_deg;   // pilot's commanded tilt — only moved by stick, never by dampening
     bool manual_override_active;
     bool pitch_saturated;
     bool roll_saturated;
@@ -125,6 +127,7 @@ struct MixerState {
 
     MixerState() :
         current_tilt_deg(0.0f),
+        pilot_tilt_deg(0.0f),
         manual_override_active(false),
         pitch_saturated(false),
         roll_saturated(false),

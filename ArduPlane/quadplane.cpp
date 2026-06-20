@@ -562,6 +562,14 @@ const AP_Param::GroupInfo QuadPlane::var_info2[] = {
     // @User: Standard
     AP_GROUPINFO("DAMP_VERT", 41, QuadPlane, damp_vert_gain, 0.15f),
 
+    // @Param: TILT_EXPO
+    // @DisplayName: Tilt stick expo
+    // @Description: Expo curve on pitch stick tilt rate input in STABILIZE plane mode. 0 = linear. Higher values give finer control near centre with the same maximum rate at full stick. Deadzone is handled separately by RC2_DZ.
+    // @Range: 0.0 0.9
+    // @Increment: 0.05
+    // @User: Standard
+    AP_GROUPINFO("TILT_EXPO", 42, QuadPlane, _tilt_expo, 0.3f),
+
     AP_GROUPEND
 };
 
@@ -1726,10 +1734,12 @@ void QuadPlane::update(void)
 #if ENABLE_TRICOPTER_VTOL_BACKEND
     // [AV-INVAR:sink-damp] — see Avatar_Design.md § 9
     float avatar_sink_rate = 0.0f;
-    if (!in_vtol_mode() && (plane.control_mode == &plane.mode_stabilize)) {
+    float av_raw_vz  = -inertial_nav.get_velocity_z_up_cms() * 0.01f;
+    float av_filt_vz = _damp_vert_vel_filter.apply(av_raw_vz);
+    if (plane.is_flying() && !in_vtol_mode() && (plane.control_mode == &plane.mode_stabilize)) {
         const float tilt_deg = ((AP_Motors6DOF*)motors)->get_tilt_deg();
         if (tilt_deg < g_config.cruise_physical_angle_deg) {
-            avatar_sink_rate = fmaxf(0.0f, -inertial_nav.get_velocity_z_up_cms() * 0.01f);
+            avatar_sink_rate = fmaxf(0.0f, av_filt_vz);
         }
     }
 #endif
@@ -1756,7 +1766,15 @@ void QuadPlane::update(void)
         plane_inputs.throttle_pct = throttle_pct;
         // [AV-INVAR:sink-damp] — see Avatar_Design.md § 9
         plane_inputs.damp_vert_thrust = avatar_sink_rate * damp_vert_gain;
-        
+        AP::logger().WriteStreaming("AVSD",
+                                   "TimeUS,RawVZ,FiltVZ,SinkRate,DampThrust",
+                                   "Qffff",
+                                   AP_HAL::micros64(),
+                                   (double)av_raw_vz,
+                                   (double)av_filt_vz,
+                                   (double)avatar_sink_rate,
+                                   (double)plane_inputs.damp_vert_thrust);
+
         plane_inputs.rudder_input = SRV_Channels::get_output_scaled(SRV_Channel::k_rudder);
         plane_inputs.aileron_input = SRV_Channels::get_output_scaled(SRV_Channel::k_aileron);
         plane_inputs.elevator_input = SRV_Channels::get_output_scaled(SRV_Channel::k_elevator);
@@ -1769,16 +1787,20 @@ void QuadPlane::update(void)
         if (in_vtol_mode()) {
             plane_inputs.pitch_tilt_demand = 0.0f;
             plane_inputs.tilt_rate_mode    = false;
+            plane_inputs.use_pid_yaw       = false;
         } else if (plane.control_mode == &plane.mode_stabilize) {
             // [AV-INVAR:stabilize-pitch-decoupled] — see Avatar_Design.md § 9
             // [AV-INVAR:stabilize-tilt-rate-control] — see Avatar_Design.md § 9
-            plane_inputs.pitch_tilt_demand = constrain_float(
-                plane.channel_pitch->norm_input_dz(), -1.0f, 1.0f);
+            // [AV-INVAR:stabilize-yaw-pid] — see Avatar_Design.md § 9
+            plane_inputs.pitch_tilt_demand = input_expo(
+                plane.channel_pitch->norm_input_dz(), _tilt_expo);
             plane_inputs.tilt_rate_mode    = true;
+            plane_inputs.use_pid_yaw       = true;
         } else {
             plane_inputs.pitch_tilt_demand = constrain_float(
                 plane.nav_pitch_cd / (plane.aparm.pitch_limit_max * 100.0f), -1.0f, 1.0f);
             plane_inputs.tilt_rate_mode    = false;
+            plane_inputs.use_pid_yaw       = false;
         }
         ((AP_Motors6DOF*)motors)->set_plane_inputs(plane_inputs);
     }
@@ -1888,6 +1910,11 @@ void QuadPlane::update(void)
                 const float roll_kP = attitude_control->get_angle_roll_p().kP();
                 const float roll_rate_cds = degrees(roll_kP * roll_error_rad) * 100.0f;
                 attitude_control->rate_bf_roll_target(roll_rate_cds);
+
+                // [AV-INVAR:stabilize-yaw-pid] — see Avatar_Design.md § 9
+                if (plane.control_mode == &plane.mode_stabilize) {
+                    attitude_control->rate_bf_yaw_target(get_pilot_input_yaw_rate_cds());
+                }
 
                 attitude_control->set_throttle_out(get_pilot_throttle(), false, 0);
 

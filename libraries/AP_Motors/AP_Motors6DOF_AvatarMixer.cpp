@@ -66,11 +66,16 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         {
             if (inputs.plane.tilt_rate_mode) {
                 // [AV-INVAR:stabilize-tilt-rate-control] — see Avatar_Design.md § 9
-                // Rate control: pitch_tilt_demand [-1..1] is a rate command.
-                // Full stick = tilt_rate_up_dps (Q_TILT_RATE_UP). Neutral stick = hold position.
+                // Rate control: stick moves pilot_tilt_deg (intent); current_tilt_deg tracks it.
+                // Sink dampening may pull current_tilt_deg toward vertical — pilot_tilt_deg is
+                // never modified by dampening, so current_tilt_deg recovers to it when sink clears.
                 float rate = std::max(1.0f, inputs.tilt_rate_up_dps) * inputs.plane.pitch_tilt_demand;
-                state.current_tilt_deg -= rate * inputs.dt;
-                state.current_tilt_deg = constrain_float(state.current_tilt_deg, 0.0f, g_config.forward_flight_physical_angle_deg);
+                state.pilot_tilt_deg -= rate * inputs.dt;
+                state.pilot_tilt_deg = constrain_float(state.pilot_tilt_deg, g_config.reverse_flight_physical_angle_deg, g_config.forward_flight_physical_angle_deg);
+                const float rate_clamp = std::max(1.0f, inputs.tilt_rate_up_dps) * inputs.dt;
+                state.current_tilt_deg = constrain_float(state.pilot_tilt_deg,
+                    state.current_tilt_deg - rate_clamp,
+                    state.current_tilt_deg + rate_clamp);
             } else {
                 // [AV-INVAR:plane-tilt-slew] — see Avatar_Design.md § 9
                 // Position control: nav_pitch_cd (pilot + TECS) sets the target; state.current_tilt_deg
@@ -141,11 +146,13 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         outputs.aileron_out  = -inputs.plane.aileron_input / 4500.0f;
         float rear_demand = (throttle_pct - inputs.pitch) * cos_tilt_b;
         outputs.limit.pitch = (rear_demand > 1.0f || rear_demand < 0.0f);
-        // Yaw: pilot rudder input drives rear motor differential, fading from full authority
-        // in hover to zero in cruise (same cos_tilt_b handoff as roll).
-        // [AV-INVAR:yaw-handoff-cos-tilt] — see Avatar_Design.md § 9
-        float yaw_delta_b = (inputs.plane.rudder_input / 4500.0f) * cos_tilt_b;
-        outputs.rudder_out = inputs.plane.rudder_input / 4500.0f;
+        // Yaw: STABILIZE uses copter attitude PID (inputs.yaw); all other plane modes use raw rudder stick.
+        // [AV-INVAR:stabilize-yaw-pid] and [AV-INVAR:yaw-handoff-cos-tilt] — see Avatar_Design.md § 9
+        const float yaw_norm = inputs.plane.use_pid_yaw
+            ? inputs.yaw
+            : (inputs.plane.rudder_input / 4500.0f);
+        float yaw_delta_b = yaw_norm * cos_tilt_b;
+        outputs.rudder_out = yaw_norm;
         outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_demand + yaw_delta_b, 0.0f, 1.0f);
         outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_demand - yaw_delta_b, 0.0f, 1.0f);
 
@@ -171,6 +178,7 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         state.manual_override_active = false;
         if (inputs.spool_state == AP_Motors::SpoolState::SHUT_DOWN) {
             state.current_tilt_deg = 0.0f;
+            state.pilot_tilt_deg   = 0.0f;
             return;
         }
         if (inputs.spool_state == AP_Motors::SpoolState::GROUND_IDLE) {

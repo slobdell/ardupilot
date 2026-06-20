@@ -21,6 +21,7 @@
 #include <AP_Logger/LogStructure.h>
 #include <AP_Mission/AP_Mission.h>
 #include <AP_Proximity/AP_Proximity.h>
+#include <Filter/LowPassFilter2p.h>
 #include "qautotune.h"
 #include "defines.h"
 #include "tailsitter.h"
@@ -618,6 +619,10 @@ private:
 
     // [AV-INVAR:sink-damp] — see Avatar_Design.md § 9
     AP_Float damp_vert_gain;
+    AP_Float _tilt_expo;
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    LowPassFilter2pFloat _damp_vert_vel_filter{400.0f, 0.5f};
+#endif
 
     AP_Float takeoff_failure_scalar;
     AP_Float maximum_takeoff_airspeed;
