@@ -596,6 +596,14 @@ const AP_Param::GroupInfo QuadPlane::var_info2[] = {
     // @User: Standard
     AP_GROUPINFO("DAMP_LONG_FILT", 45, QuadPlane, damp_long_filt_hz, 2.0f),
 
+    // @Param: DAMP_VEL
+    // @DisplayName: Longitudinal velocity hold gain
+    // @Description: P-gain for velocity-hold dampening in STABILIZE plane mode. When the pitch stick is at neutral, applies a horizontal thrust correction proportional to body-frame forward velocity to drive it toward zero. Unlike Q_DAMP_LONG (acceleration-based), this is inherently stable and does not require filtering. Units: horizontal-thrust-fraction per m/s. 0 = disabled.
+    // @Range: 0.0 0.3
+    // @Increment: 0.01
+    // @User: Standard
+    AP_GROUPINFO("DAMP_VEL", 61, QuadPlane, damp_vel_gain, 0.0f),
+
     AP_GROUPEND
 };
 
@@ -1812,6 +1820,41 @@ void QuadPlane::update(void)
     } else {
         _damp_long_fade_factor = 1.0f;
     }
+
+    // [AV-INVAR:vel-damp] — see Avatar_Design.md § 9
+    float avatar_vel_damp_thrust = 0.0f;
+    float av_vel_bf_x = 0.0f;
+    if (plane.is_flying() && !in_vtol_mode() && (plane.control_mode == &plane.mode_stabilize)) {
+        Vector3f vel_ned;
+        if (AP::ahrs().get_velocity_NED(vel_ned)) {
+            const Matrix3f &rot_body_to_ned = AP::ahrs().get_rotation_body_to_ned();
+            const Vector3f vel_bf = rot_body_to_ned.mul_transpose(vel_ned);
+            av_vel_bf_x = vel_bf.x;
+            const float pitch_stick = plane.channel_pitch->norm_input_dz();
+            // Saturation guard: freeze hold target when motors are maxed — see Avatar_Design.md § 9
+            // [AV-INVAR:vel-damp].
+            const float throttle_out = motors->get_throttle();
+            const bool motors_saturated = throttle_out >= 0.95f;
+            if (fabsf(pitch_stick) > 0.05f && !motors_saturated) {
+                // Slew-rate limit the hold target so a brief stick touch never teleports
+                // VxHld to a speed far from the current target — see Avatar_Design.md § 9
+                // [AV-INVAR:vel-damp].
+                constexpr float VEL_HOLD_TARGET_SLEW_MS2 = 0.5f;
+                const float dt = AP::scheduler().get_loop_period_s();
+                const float max_step = VEL_HOLD_TARGET_SLEW_MS2 * dt;
+                _vel_hold_target += constrain_float(vel_bf.x - _vel_hold_target,
+                                                    -max_step, max_step);
+            }
+            if (damp_vel_gain > 0.0f) {
+                // Error cap — see Avatar_Design.md § 9 [AV-INVAR:vel-damp].
+                constexpr float VEL_DAMP_ERROR_CAP_MS = 1.5f;
+                const float vel_error = constrain_float(vel_bf.x - _vel_hold_target,
+                                                        -VEL_DAMP_ERROR_CAP_MS,
+                                                         VEL_DAMP_ERROR_CAP_MS);
+                avatar_vel_damp_thrust = -vel_error * damp_vel_gain * _damp_long_fade_factor;
+            }
+        }
+    }
 #endif
 
 #if ENABLE_TRICOPTER_VTOL_BACKEND
@@ -1836,34 +1879,62 @@ void QuadPlane::update(void)
         plane_inputs.throttle_pct = throttle_pct;
         // [AV-INVAR:sink-damp] — see Avatar_Design.md § 9
         plane_inputs.damp_vert_thrust  = avatar_sink_rate * damp_vert_gain;
-        // [AV-INVAR:long-damp] — see Avatar_Design.md § 9
-        plane_inputs.damp_horiz_thrust = avatar_long_damp_thrust;
+        // [AV-INVAR:long-damp] and [AV-INVAR:vel-damp] — see Avatar_Design.md § 9
+        plane_inputs.damp_horiz_thrust = avatar_long_damp_thrust + avatar_vel_damp_thrust;
         const float av_pilot_tilt = ((AP_Motors6DOF*)motors)->get_pilot_tilt_deg();
         const float av_curr_tilt  = ((AP_Motors6DOF*)motors)->get_tilt_deg();
+
+        // Compute the force-vector tilt target (mirrors the mixer logic) so we can log it.
+        // When dampening is active this diverges from av_pilot_tilt — the gap shows how
+        // hard dampening is pulling the servo away from pilot intent each frame.
+        float av_damp_target_deg = av_pilot_tilt;
+        const bool av_has_damp = (plane_inputs.damp_vert_thrust > 0.0f ||
+                                   fabsf(plane_inputs.damp_horiz_thrust) > 1e-4f);
+        if (av_has_damp) {
+            const float thr   = plane_inputs.throttle_pct * 0.01f;
+            const float sin_t = sinf(radians(av_pilot_tilt));
+            const float cos_t = cosf(radians(av_pilot_tilt));
+            const float th    = thr * sin_t + plane_inputs.damp_horiz_thrust;
+            const float tv    = thr * cos_t + plane_inputs.damp_vert_thrust;
+            const float mag   = sqrtf(th * th + tv * tv);
+            if (mag > 1.0f) {
+                const float vc = constrain_float(tv, 0.0f, 1.0f);
+                const float hr = sqrtf(fmaxf(0.0f, 1.0f - vc * vc));
+                av_damp_target_deg = degrees(atan2f(copysignf(hr, th), vc));
+            } else {
+                av_damp_target_deg = degrees(atan2f(th, tv));
+            }
+            av_damp_target_deg = constrain_float(av_damp_target_deg,
+                g_config.reverse_flight_physical_angle_deg,
+                g_config.forward_flight_physical_angle_deg);
+        }
+
         {
             static uint32_t last_tilt_dbg_ms = 0;
             const uint32_t now_ms = AP_HAL::millis();
             if (now_ms - last_tilt_dbg_ms >= 500) {
                 last_tilt_dbg_ms = now_ms;
                 gcs().send_text(MAV_SEVERITY_INFO,
-                    "TILT pilot=%.1f curr=%.1f demand=%.2f",
+                    "TILT pilot=%.1f curr=%.1f target=%.1f damp=%.2f/%.2f",
                     (double)av_pilot_tilt,
                     (double)av_curr_tilt,
-                    (double)plane_inputs.pitch_tilt_demand);
+                    (double)av_damp_target_deg,
+                    (double)plane_inputs.damp_vert_thrust,
+                    (double)plane_inputs.damp_horiz_thrust);
             }
         }
+        // NOTE: AP_Logger FMT labels field is 64 bytes (63 chars + null). Keep this string ≤ 63.
         AP::logger().WriteStreaming("AVSD",
-                                   "TimeUS,RawVZ,FiltVZ,SinkRate,DampThrust,PilotTilt,CurrTilt,RawAX,FiltAX,DampFade,DampFX",
-                                   "Qffffffffff",
+                                   "TimeUS,VzFlt,DmpV,PTilt,CTilt,TTgt,VxBf,VxHld,Fade,DmpH",
+                                   "Qfffffffff",
                                    AP_HAL::micros64(),
-                                   (double)av_raw_vz,
                                    (double)av_filt_vz,
-                                   (double)avatar_sink_rate,
                                    (double)plane_inputs.damp_vert_thrust,
                                    (double)av_pilot_tilt,
                                    (double)av_curr_tilt,
-                                   (double)av_raw_ax,
-                                   (double)av_filt_ax,
+                                   (double)av_damp_target_deg,
+                                   (double)av_vel_bf_x,
+                                   (double)_vel_hold_target,
                                    (double)_damp_long_fade_factor,
                                    (double)plane_inputs.damp_horiz_thrust);
 

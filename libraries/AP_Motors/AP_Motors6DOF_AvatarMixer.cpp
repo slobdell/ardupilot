@@ -63,19 +63,76 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // =====================================================================
         state.manual_override_active = false;
 
+        float throttle_pct = inputs.plane.throttle_pct * 0.01f;
+
+        // Copter→plane throttle blend: ramp from the last copter-mode wing-motor throttle
+        // to the plane throttle over 0.5 s so the pilot experiences a smooth handoff rather
+        // than a step change. copter_to_plane_blend is reset to 0 each frame in copter mode.
+        if (state.copter_to_plane_blend < 1.0f) {
+            state.copter_to_plane_blend = fminf(1.0f, state.copter_to_plane_blend + inputs.dt / 0.5f);
+            throttle_pct = state.last_copter_throttle * (1.0f - state.copter_to_plane_blend)
+                         + throttle_pct              *  state.copter_to_plane_blend;
+        }
+
         {
             if (inputs.plane.tilt_rate_mode) {
                 // [AV-INVAR:stabilize-tilt-rate-control] — see Avatar_Design.md § 9
-                // Rate control: stick moves pilot_tilt_deg (intent); current_tilt_deg tracks it.
-                // Sink dampening may pull current_tilt_deg toward vertical — pilot_tilt_deg is
-                // never modified by dampening, so current_tilt_deg recovers to it when sink clears.
+                // Stick updates pilot_tilt_deg (intent). Dampening computes a combined tilt
+                // target from the force-vector decomposition. current_tilt_deg slews toward
+                // that combined target in ONE rate-limited step.
+                //
+                // Previously: tilt rate control slewed toward pilot_tilt_deg, then dampening
+                // slewed toward new_tilt_deg — both using the same rate limit in opposite
+                // directions, cancelling each other every frame. The unified slew fixes this.
+                // pilot_tilt_deg is still preserved so current_tilt_deg recovers to pilot
+                // intent when dampening ends.
+                //
+                // Throttle: new_throttle is the additive, geometrically correct magnitude for
+                // the full demanded force vector at the target tilt. It is not corrected for the
+                // current servo position during the slew — doing so would increase both vertical
+                // AND forward thrust proportionally, worsening a sink caused by excess forward
+                // tilt. The correct lever for faster dampening authority is Q_TILT_RATE_UP.
                 float rate = std::max(1.0f, inputs.tilt_rate_up_dps) * inputs.plane.pitch_tilt_demand;
                 state.pilot_tilt_deg -= rate * inputs.dt;
-                state.pilot_tilt_deg = constrain_float(state.pilot_tilt_deg, g_config.reverse_flight_physical_angle_deg, g_config.forward_flight_physical_angle_deg);
+                state.pilot_tilt_deg = constrain_float(state.pilot_tilt_deg,
+                    g_config.reverse_flight_physical_angle_deg,
+                    g_config.forward_flight_physical_angle_deg);
+
+                // Default: track pilot intent. Dampening overrides with the combined target.
+                float tilt_target_deg = state.pilot_tilt_deg;
+
+                // [AV-INVAR:sink-damp] and [AV-INVAR:long-damp] — see Avatar_Design.md § 9
+                const bool has_vert_damp  = (inputs.plane.damp_vert_thrust  > 0.0f);
+                const bool has_horiz_damp = (fabsf(inputs.plane.damp_horiz_thrust) > 1e-4f);
+                if (has_vert_damp || has_horiz_damp) {
+                    // Decompose from pilot intent — dampening is additive on top of pilot's
+                    // commanded thrust vector, not compounded off the already-dampened position.
+                    float sin_t = sinf(radians(state.pilot_tilt_deg));
+                    float cos_t = cosf(radians(state.pilot_tilt_deg));
+                    float thrust_horiz = throttle_pct * sin_t + inputs.plane.damp_horiz_thrust;
+                    float thrust_vert  = throttle_pct * cos_t + inputs.plane.damp_vert_thrust;
+                    float new_throttle = sqrtf(thrust_horiz * thrust_horiz + thrust_vert * thrust_vert);
+                    if (new_throttle > 1.0f) {
+                        // Saturated: preserve vertical lift, allocate remaining headroom to horizontal.
+                        // copysignf preserves the direction of the horizontal demand.
+                        float thrust_vert_clamped = constrain_float(thrust_vert, 0.0f, 1.0f);
+                        float horiz_remaining     = sqrtf(fmaxf(0.0f, 1.0f - thrust_vert_clamped * thrust_vert_clamped));
+                        tilt_target_deg = degrees(atan2f(copysignf(horiz_remaining, thrust_horiz), thrust_vert_clamped));
+                        throttle_pct = 1.0f;
+                    } else {
+                        tilt_target_deg = degrees(atan2f(thrust_horiz, thrust_vert));
+                        throttle_pct = new_throttle;
+                    }
+                    tilt_target_deg = constrain_float(tilt_target_deg,
+                        g_config.reverse_flight_physical_angle_deg,
+                        g_config.forward_flight_physical_angle_deg);
+                }
+
+                // Single rate-limited slew toward combined target (bidirectional: dampening
+                // can tilt forward or back depending on longitudinal demand).
                 const float rate_clamp = std::max(1.0f, inputs.tilt_rate_up_dps) * inputs.dt;
-                state.current_tilt_deg = constrain_float(state.pilot_tilt_deg,
-                    state.current_tilt_deg - rate_clamp,
-                    state.current_tilt_deg + rate_clamp);
+                state.current_tilt_deg += constrain_float(
+                    tilt_target_deg - state.current_tilt_deg, -rate_clamp, rate_clamp);
             } else {
                 // [AV-INVAR:plane-tilt-slew] — see Avatar_Design.md § 9
                 // Position control: nav_pitch_cd (pilot + TECS) sets the target; state.current_tilt_deg
@@ -103,60 +160,6 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // Both actuators cooperate to hold the fuselage level; gain may need flight tuning.
         // [AV-INVAR:elevator-follows-pitch-pid] — see Avatar_Design.md § 9
         outputs.elevator_out = inputs.pitch;
-
-        float throttle_pct = inputs.plane.throttle_pct * 0.01f;
-
-        // [AV-INVAR:sink-damp] and [AV-INVAR:long-damp] — see Avatar_Design.md § 9
-        // Unified force-vector decomposition: vertical and horizontal damping forces are added
-        // to the pilot-intent thrust vector. The decomposition produces a new tilt angle and a
-        // new throttle magnitude that together preserve the original forward component while
-        // delivering the additional demanded vertical (and/or horizontal) thrust.
-        //
-        // Throttle intent: new_throttle is the strictly additive, geometrically correct magnitude
-        // for the FULL demanded force vector at the TARGET tilt angle. It is NOT computed for the
-        // current servo position. During the servo slew the actual vertical thrust produced is
-        // slightly less than desired (the servo is still more horizontal than the target), but
-        // this is intentional — the only way to add vertical thrust at the CURRENT forward angle
-        // without also adding undesired forward thrust is to tilt first. Adjusting throttle to
-        // compensate during the slew would increase both vertical AND forward thrust proportionally
-        // (since sin/cos both scale with throttle at a fixed angle), worsening the sink if the
-        // aircraft is already descending due to excess forward tilt. The correct authority over
-        // purely vertical thrust only materialises once the servo reaches the target angle.
-        // The real limit is Q_TILT_RATE_UP — a faster servo slew is the correct lever to pull
-        // if dampening authority during the transition is insufficient.
-        const bool has_vert_damp  = (inputs.plane.damp_vert_thrust  > 0.0f);
-        const bool has_horiz_damp = (fabsf(inputs.plane.damp_horiz_thrust) > 1e-4f);
-        if (has_vert_damp || has_horiz_damp) {
-            // Decompose from pilot intent, not the already-dampened servo position.
-            // Dampening is additive on top of what the pilot wants — compounding off
-            // current_tilt_deg would progressively erode the forward component across frames.
-            float sin_t = sinf(radians(state.pilot_tilt_deg));
-            float cos_t = cosf(radians(state.pilot_tilt_deg));
-            float thrust_horiz = throttle_pct * sin_t + inputs.plane.damp_horiz_thrust;
-            float thrust_vert  = throttle_pct * cos_t + inputs.plane.damp_vert_thrust;
-            float new_throttle = sqrtf(thrust_horiz * thrust_horiz + thrust_vert * thrust_vert);
-            float new_tilt_deg;
-            if (new_throttle > 1.0f) {
-                // Saturated: preserve vertical lift, allocate remaining headroom to horizontal.
-                // copysignf preserves the direction of the horizontal demand (forward vs. backward tilt).
-                float thrust_vert_clamped = constrain_float(thrust_vert, 0.0f, 1.0f);
-                float horiz_remaining     = sqrtf(fmaxf(0.0f, 1.0f - thrust_vert_clamped * thrust_vert_clamped));
-                float horiz_clamped       = copysignf(horiz_remaining, thrust_horiz);
-                new_tilt_deg = degrees(atan2f(horiz_clamped, thrust_vert_clamped));
-                throttle_pct = 1.0f;
-            } else {
-                new_tilt_deg = degrees(atan2f(thrust_horiz, thrust_vert));
-                throttle_pct = new_throttle;
-            }
-            new_tilt_deg = constrain_float(new_tilt_deg, g_config.reverse_flight_physical_angle_deg, g_config.forward_flight_physical_angle_deg);
-            // Bidirectional rate limit: longitudinal damp can tilt forward OR back.
-            float max_rate   = inputs.tilt_rate_up_dps * inputs.dt;
-            float delta_tilt = constrain_float(new_tilt_deg - state.current_tilt_deg, -max_rate, max_rate);
-            state.current_tilt_deg += delta_tilt;
-            outputs.tilt_angle = state.current_tilt_deg >= 0.0f
-                ? state.current_tilt_deg / g_config.forward_flight_physical_angle_deg
-                : state.current_tilt_deg / fabsf(g_config.reverse_flight_physical_angle_deg);
-        }
 
         // cos(tilt): 1 at wings-vertical (hover), 0 at wings-horizontal (cruise).
         // Scales both motor roll differential and rear motor — authority fades as
@@ -269,6 +272,11 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         state.current_tilt_deg = constrain_float(target_deg,
             state.current_tilt_deg - (tilt_rate * inputs.dt),
             state.current_tilt_deg + (tilt_rate * inputs.dt));
+        // [AV-INVAR:stabilize-tilt-rate-control] — keep pilot intent in sync with where
+        // the TVC actually leaves the servo. Without this, switching back to STABILIZE
+        // slews toward a stale pilot_tilt_deg from a previous STABILIZE session, causing
+        // the servo to jump. With this, the STABILIZE path starts from the current position.
+        state.pilot_tilt_deg = state.current_tilt_deg;
         float error_deg = fabsf(state.current_tilt_deg - target_deg);
         throttle_thrust *= constrain_float(cosf(radians(error_deg)), 0.0f, 1.0f);
         // TODO: this cos(error) scaling reduces throttle symmetrically regardless of which
@@ -290,6 +298,10 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         float base_thrust = throttle_thrust + inputs.pitch;
         outputs.limit.pitch = (base_thrust > 1.0f || base_thrust < 0.0f);
         base_thrust = constrain_float(base_thrust, 0.0f, 1.0f);
+        // Track effective wing-motor throttle for smooth copter→plane handoff.
+        // Reset blend to 0 each frame so the first plane-mode frame starts the ramp.
+        state.last_copter_throttle = base_thrust;
+        state.copter_to_plane_blend = 0.0f;
         float desired_roll = inputs.roll * roll_effectiveness;
         // De-saturate by shifting both motors equally so the roll differential is
         // preserved even when throttle has pushed base_thrust to 1.0. Sacrifices

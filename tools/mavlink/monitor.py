@@ -74,6 +74,9 @@ def main():
 
     # Request STATUSTEXT at a high rate so we don't miss startup messages
     request_message_interval(mav, mavutil.mavlink.MAVLINK_MSG_ID_STATUSTEXT, 10)
+    request_message_interval(mav, mavutil.mavlink.MAVLINK_MSG_ID_SYS_STATUS, 1)
+
+    last_voltage = None
 
     os.makedirs(LOG_DIR, exist_ok=True)
     print(f"\n--- Listening (Ctrl+C to stop) --- logging to {LOG_FILE}\n")
@@ -87,9 +90,13 @@ def main():
                 if t == 'BAD_DATA':
                     continue
                 ts = time.strftime('%H:%M:%S')
+                if t == 'SYS_STATUS':
+                    last_voltage = msg.voltage_battery / 1000.0
+                    continue
                 if t == 'STATUSTEXT':
-                    line = f"{ts}  {fmt_statustext(msg)}"
-                    plain = f"{ts}  [{SEVERITY.get(msg.severity, '?'):6s}] {msg.text.rstrip(chr(0)).strip()}"
+                    batt = f"  \033[33m{last_voltage:.2f}V\033[0m" if last_voltage is not None else ''
+                    line = f"{ts}  {fmt_statustext(msg)}{batt}"
+                    plain = f"{ts}  [{SEVERITY.get(msg.severity, '?'):6s}] {msg.text.rstrip(chr(0)).strip()}  {last_voltage:.2f}V" if last_voltage else f"{ts}  [{SEVERITY.get(msg.severity, '?'):6s}] {msg.text.rstrip(chr(0)).strip()}"
                 elif show_all or t in extra_types:
                     line = f"{ts}  [{t}] {msg.to_dict()}"
                     plain = line

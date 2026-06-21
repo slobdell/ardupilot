@@ -627,6 +627,8 @@ private:
     AP_Float damp_long_filt_hz;
     LowPassFilter2pFloat _damp_long_accel_filter{400.0f, 2.0f};
     float _damp_long_fade_factor = 1.0f;
+    AP_Float damp_vel_gain;
+    float _vel_hold_target = 0.0f;
 #endif
 
     AP_Float takeoff_failure_scalar;

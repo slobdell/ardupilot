@@ -757,9 +757,15 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 **Why:** Position control (FBWA) snaps the tilt angle to a value proportional to stick position — releasing the stick always commands a fixed angle. This is wrong for a VTOL aircraft where the pilot wants to park the rotors at an arbitrary angle and hold it there. Rate control lets the pilot adjust tilt incrementally and release to freeze it. `Q_TILT_RATE_UP` is the correct rate ceiling because it is calibrated to the physical servo speed — 100% stick = maximum the servo can physically move. `Q_TILT_RATE_DN` was chosen to pace the hover→cruise airspeed transition in FBWA and has no meaning here.
 
-**Sign convention:** positive `pitch_tilt_demand` = toward vertical = decreases `state.current_tilt_deg` (0° = vertical, 90° = horizontal). This matches the sign convention of `[AV-INVAR:tilt-follows-nav-pitch]`.
+**Sign convention:** positive `pitch_tilt_demand` = toward vertical = decreases `state.pilot_tilt_deg` (0° = vertical, 90° = horizontal). This matches the sign convention of `[AV-INVAR:tilt-follows-nav-pitch]`.
 
-**Servo limits:** `state.current_tilt_deg` is clamped to `[0, forward_flight_physical_angle_deg]`. When the past-horizontal servo range is extended (see § 4.4.2), lower the floor to `-reverse_flight_physical_angle_deg`.
+**Unified slew (critical):** The `tilt_rate_mode` branch computes a single combined tilt target each frame and issues ONE rate-limited slew of `state.current_tilt_deg` toward it:
+- No dampening active: target = `state.pilot_tilt_deg` → classic rate-control behaviour.
+- Dampening active (`[AV-INVAR:sink-damp]`, `[AV-INVAR:long-damp]`, or `[AV-INVAR:vel-damp]`): target = `new_tilt_deg` from the force-vector decomposition, which is `pilot_tilt_deg` modified by the damping demand.
+
+**Do NOT split this into two separate rate-limited moves** (e.g., tilt-rate-control slewing toward `pilot_tilt_deg` followed by a dampening block slewing toward `new_tilt_deg`). If both use the same rate limit in opposite directions they cancel exactly every frame — the net result is that `current_tilt_deg` never moves more than one rate-step from `pilot_tilt_deg` regardless of how large the dampening demand is. This was the root cause of the vertical and longitudinal dampening appearing to have no effect in flight logs (DampThrust was nonzero, CurrTilt tracked PilotTilt). The unit tests in `GROUP K` of `tests/mixer_test/test_main.cpp` prove this invariant.
+
+**Servo limits:** `state.current_tilt_deg` is clamped to `[reverse_flight_physical_angle_deg, forward_flight_physical_angle_deg]`. The tilt slew is bidirectional — longitudinal dampening can command a target more forward than `pilot_tilt_deg` as well as more vertical.
 
 ---
 
@@ -848,6 +854,44 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 **Why gate at `cruise_physical_angle_deg`:** When rotors are tilted past 90°, the pilot is deliberately commanding descent via tilt (see § 4.4.3). Dampening would fight that intent.
 
 **Do not revert to separate tilt-dampening and throttle-boost parameters.** The decomposition is more correct at near-horizontal tilt angles, which is precisely where the documented crash scenarios occurred. The `fmaxf(cos_tilt, floor)` floor required by the old throttle-boost formula was a symptom of the formula being wrong in that regime.
+
+---
+
+### [AV-INVAR:long-damp]
+
+**What:** When the aircraft accelerates forward in STABILIZE plane mode, a horizontal thrust correction `damp_horiz = -accel_bf_x × Q_DAMP_LONG × fade` is injected into `PlaneInputs::damp_horiz_thrust`. The force-vector decomposition in the mixer recomposes the pilot's thrust vector with this horizontal component, tilting the rotors back against the acceleration. A 2 Hz low-pass filter (`Q_DAMP_LONG_FILT`) smooths body-frame acceleration before it reaches the gain. A stick-activity fade zeroes the correction within 100 ms of pitch stick movement and restores it over 500 ms at centre — preventing the dampener from fighting deliberate pilot speed changes.
+
+**Where:** `ArduPlane/quadplane.cpp` — computed in the `[AV-INVAR:long-damp]` block, summed into `damp_horiz_thrust` alongside `[AV-INVAR:vel-damp]`.
+
+**Why acceleration-based is limited:** The filter introduces phase lag. At higher gains the corrective thrust arrives out of phase with the acceleration it is trying to damp, injecting energy instead of removing it and producing a self-sustaining pitch oscillation. In practice `Q_DAMP_LONG` must be kept at or below 0.05 on this airframe to stay stable. For stronger velocity hold, use `[AV-INVAR:vel-damp]` instead.
+
+**Why P-only (no I, no D):** D of acceleration = jerk — amplifies noise catastrophically. I would wind up against sustained wind.
+
+---
+
+### [AV-INVAR:vel-damp]
+
+**What:** A P controller on body-frame forward velocity error that holds the speed captured at stick release. While the pitch stick is active, `_vel_hold_target` updates continuously to track current velocity. The moment the stick returns to neutral, the snapshot freezes and the correction `-(vel_bf_x - _vel_hold_target) × Q_DAMP_VEL × fade` drives the aircraft back to exactly that speed. EKF NED velocity is rotated to body frame via the full rotation matrix (same approach as `[AV-INVAR:long-damp]`'s acceleration path). Uses the identical stick-activity fade factor as `[AV-INVAR:long-damp]` — zeroes within 100 ms of stick movement, recovers over 500 ms at centre.
+
+**Where:** `ArduPlane/quadplane.cpp` — computed immediately after the `[AV-INVAR:long-damp]` block, summed into `damp_horiz_thrust` via `plane_inputs.damp_horiz_thrust = avatar_long_damp_thrust + avatar_vel_damp_thrust`.
+
+**Why velocity rather than acceleration:** Velocity is the integral of acceleration — it changes slowly, has negligible phase lag relative to the oscillation frequencies of this airframe, and requires no filter. The closed-loop system is first-order: `v̇ = -K·v`, giving exponential decay to zero velocity. This is inherently stable at all gains (no phase margin issue). Contrast with `[AV-INVAR:long-damp]`, which is effectively a derivative-of-velocity feedback and requires a filter that introduces phase lag.
+
+**Why no filter on EKF velocity:** EKF fuses GPS, accelerometers, and barometer — the velocity output is already smooth. Adding a filter would reintroduce the phase lag that causes `[AV-INVAR:long-damp]` to oscillate. Validated by inspection of `XKF1.VN` and `XKF1.VE` in flight logs.
+
+**Why shared fade factor:** Both dampeners must yield simultaneously to pilot stick input. Using independent fades would allow one to remain active while the other zeroes, producing an asymmetric thrust demand that fights the pilot.
+
+**Why snapshot rather than zero target:** Zero target would actively decelerate the aircraft during normal forward cruise whenever the pilot releases the stick — fighting intentional flight. The snapshot captures pilot intent at the moment of release and holds it, correcting only deviations from that speed caused by wind or disturbances.
+
+**Why P-only:** I-term would wind up against a steady headwind, producing a constant backward tilt that surprises the pilot when the wind drops. D-term would differentiate velocity = acceleration, reintroducing the phase-lag instability of `[AV-INVAR:long-damp]`.
+
+**Saturation guard:** `_vel_hold_target` is only updated when `motors->get_throttle() < 0.95`. When motors are saturated the controller has no authority to execute the correction anyway; allowing the target to update to the current (runaway) speed would zero the error and snap the tilt forward violently the moment saturation clears. Freezing the target preserves the error so correction resumes as soon as headroom returns.
+
+**Hold target slew rate (`VEL_HOLD_TARGET_SLEW_MS2 = 0.5 m/s²`):** `_vel_hold_target` is rate-limited when updating toward `vel_bf.x` during stick-active periods. A brief stick touch (e.g. 100 ms) can only move the target by ~0.05 m/s — it cannot teleport to a speed far from the current hold value. This prevents a backward lurch caused by: (1) aircraft drifts to a slow speed, (2) brief stick touch snaps target to that slow speed, (3) large overspeed error on stick release snaps the tilt backward. At 0.5 m/s², a sustained 3-second stick input can still shift the target by 1.5 m/s — enough for normal intentional speed changes.
+
+**Error cap ±1.5 m/s (`VEL_DAMP_ERROR_CAP_MS`):** The velocity error fed into the gain is clamped to ±1.5 m/s. Backstop against any residual large error reaching the mixer; prevents a violent multi-degree tilt snap even in edge cases not covered by the slew limiter.
+
+**Starting value:** `Q_DAMP_VEL = 0.20` (horizontal thrust fraction per m/s of velocity error). At 1 m/s deviation from hold speed this commands 0.20 units of corrective horizontal thrust.
 
 ---
 

@@ -3,8 +3,15 @@
 // ACTIVE CONFIG
 // =============
 // Both mixer tests run against g_config = avatarConfig
-// (ACTIVE_CONFIG = CONFIG_TYPE_AVATAR, forward_flight_physical_angle_deg = 90°).
+// (ACTIVE_CONFIG = CONFIG_TYPE_AVATAR, forward_flight_physical_angle_deg = 95°,
+//  cruise_physical_angle_deg = 90°, reverse_flight_physical_angle_deg = -15°).
 // Expected values are computed for that config.
+//
+// Key normalisation constants (used throughout):
+//   tilt_angle = current_tilt_deg / FWD_DEG  (positive tilt)
+//   In copter mode the TVC is capped at CRUISE_DEG, so max tilt_angle = CRUISE_DEG/FWD_DEG.
+static constexpr float FWD_DEG    = 95.0f;  // forward_flight_physical_angle_deg
+static constexpr float CRUISE_DEG = 90.0f;  // cruise_physical_angle_deg
 //
 // WHAT IS BEING TESTED
 // ====================
@@ -211,15 +218,15 @@ void elevator_tilt_split_negative_input_is_sign_symmetric()
 
 void avatar_plane_neutral_tilt_demand_gives_wings_horizontal()
 {
-    // pilot pitch stick at 0 → tilt_angle = 1 − 0 = 1.0 (wings fully horizontal,
-    // maximum forward thrust)
+    // Neutral stick in FBWA targets cruise_physical_angle_deg (90°), not the full
+    // forward_flight_physical_angle_deg (95°).  tilt_angle = 90/95 ≈ 0.9474.
     begin_test(__func__);
     AvatarMixer mixer;
     MixerInputs  in  = neutral_plane_inputs();
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(1.0f, out.tilt_angle, 0.001f);
+    CHECK_NEAR(CRUISE_DEG / FWD_DEG, out.tilt_angle, 0.001f);
     end_test();
 }
 
@@ -526,7 +533,7 @@ void pitch_compensation_30_degrees_up_tilts_wings_30_degrees_from_vertical()
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(30.0f / 90.0f, out.tilt_angle, 0.01f);
+    CHECK_NEAR(30.0f / FWD_DEG, out.tilt_angle, 0.01f);
     end_test();
 }
 
@@ -551,7 +558,7 @@ void pitch_compensation_50_degrees_up_wing_at_40_degrees_from_horizontal()
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(50.0f / 90.0f, out.tilt_angle, 0.01f); // = 0.556; wing 40° from horizontal
+    CHECK_NEAR(50.0f / FWD_DEG, out.tilt_angle, 0.01f); // wing 40° from horizontal in airframe
     end_test();
 }
 
@@ -575,7 +582,7 @@ void pitch_compensation_80_degrees_up_deep_stall_wings_nearly_vertical()
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(80.0f / 90.0f, out.tilt_angle, 0.01f); // = 0.889; only 10° from horizontal
+    CHECK_NEAR(80.0f / FWD_DEG, out.tilt_angle, 0.01f); // only 10° from horizontal in airframe
     end_test();
 }
 
@@ -599,7 +606,9 @@ void pitch_compensation_past_90_degrees_saturates_servo_and_sets_flag()
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(1.0f, out.tilt_angle, 0.001f);    // clamped at servo limit
+    // Copter mode caps tilt at cruise_norm = CRUISE_DEG/FWD_DEG (not 1.0).
+    // The servo's extra 5° (90°→95°) is reserved for FBWA transition, not copter mode.
+    CHECK_NEAR(CRUISE_DEG / FWD_DEG, out.tilt_angle, 0.001f);
     CHECK_TRUE(state.pitch_saturated);             // anti-windup flag set
     end_test();
 }
@@ -640,7 +649,7 @@ void pitch_compensation_and_forward_stick_angles_add()
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(75.0f / 90.0f, out.tilt_angle, 0.02f); // = 0.833
+    CHECK_NEAR(75.0f / FWD_DEG, out.tilt_angle, 0.02f);
     end_test();
 }
 
@@ -835,20 +844,19 @@ void roll_headroom_at_half_throttle_allows_full_roll_within_margin()
     end_test();
 }
 
-void roll_headroom_zero_at_full_throttle_clips_roll_to_zero()
+void roll_headroom_full_throttle_desaturates_by_shifting_both_motors_down()
 {
     // throttle = 1.0, roll = 0.5, wings vertical.
-    //   throttle_thrust from TVC = 1.0 (full budget, no forward)
-    //   base_thrust    = 1.0
-    //   roll_headroom  = min(0.0, 1.0) = 0.0
-    //   scaled_roll    = constrain(0.5, 0, 0) = 0
-    //   wing_left = wing_right = 1.0
-    //   limit.roll     = true
+    //   base_thrust = 1.0, desired_roll = 0.5
+    //   left_raw = 1.5, right_raw = 0.5
+    //   excess_high = 0.5, shift = 0.5
+    //   left_out = 1.0, right_out = 0.0   ← full differential preserved
+    //   limit.roll = false                 ← full demand was achieved
     //
-    // At full throttle there is no margin to increase one motor without exceeding
-    // 1.0 or decrease the other without going below 0.0.  Roll authority is
-    // gracefully zeroed rather than clipping one motor and not the other, which
-    // would cause an unintended yaw torque from prop wash asymmetry.
+    // Previously roll was zeroed entirely at full throttle (both motors = 1.0,
+    // limit.roll = true). The de-saturation fix instead shifts both motors down
+    // by the overshoot so the full roll differential is delivered at the cost of
+    // average throttle.  This ensures roll authority is never silently dropped.
     begin_test(__func__);
     AvatarMixer  mixer;
     MixerInputs  in = neutral_copter_inputs();
@@ -857,26 +865,26 @@ void roll_headroom_zero_at_full_throttle_clips_roll_to_zero()
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(out.motor_thrust[0], out.motor_thrust[1], 0.001f); // left = right
-    CHECK_TRUE(out.limit.roll);
+    CHECK_NEAR(1.0f, out.motor_thrust[0], 0.001f); // left  = 1.0
+    CHECK_NEAR(0.0f, out.motor_thrust[1], 0.001f); // right = 0.0 (full differential)
+    CHECK_FALSE(out.limit.roll);                    // demand was fully met
     end_test();
 }
 
-void pitch_correction_shifts_base_thrust_and_narrows_roll_headroom()
+void pitch_correction_with_roll_desaturates_symmetrically()
 {
-    // throttle = 0.5, pitch = +0.4 (nose-up correction), roll = 0.3, wings vertical.
-    //   throttle_thrust = 0.5 (from TVC, no forward)
-    //   base_thrust     = 0.5 + 0.4 = 0.9  (within [0,1], limit.pitch = false)
-    //   roll_headroom   = min(1 − 0.9, 0.9) = min(0.1, 0.9) = 0.1
-    //   desired_roll    = 0.3 × 1.0 = 0.3  (exceeds headroom)
-    //   scaled_roll     = constrain(0.3, −0.1, 0.1) = 0.1
-    //   wing_left       = 0.9 + 0.1 = 1.0
-    //   wing_right      = 0.9 − 0.1 = 0.8
-    //   limit.roll      = true (0.3 > 0.1)
+    // throttle = 0.5, pitch = +0.4, roll = 0.3, wings vertical.
+    //   base_thrust  = 0.5 + 0.4 = 0.9
+    //   desired_roll = 0.3
+    //   left_raw = 1.2, right_raw = 0.6
+    //   excess_high = 0.2, shift = 0.2
+    //   left_out = 1.0, right_out = 0.4   ← full 0.3 differential preserved
+    //   limit.roll = false                 ← full demand was achieved
     //
-    // A large pitch correction has "stolen" most of the headroom.  Roll is clipped
-    // symmetrically so that the average motor output is not changed — the pitch
-    // correction is preserved and the roll demand is partially satisfied.
+    // Previously the 0.1 headroom clipped roll to 0.1 (right = 0.8), leaving 0.2
+    // of roll demand undelivered.  The de-saturation fix shifts both motors down by
+    // the 0.2 overshoot so the full 0.3 differential is delivered — at the cost of
+    // slightly lower average throttle (now 0.7 instead of 0.9).
     begin_test(__func__);
     AvatarMixer  mixer;
     MixerInputs  in = neutral_copter_inputs();
@@ -885,9 +893,9 @@ void pitch_correction_shifts_base_thrust_and_narrows_roll_headroom()
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(1.0f, out.motor_thrust[0], 0.01f); // base + clipped roll
-    CHECK_NEAR(0.8f, out.motor_thrust[1], 0.01f); // base − clipped roll
-    CHECK_TRUE(out.limit.roll);
+    CHECK_NEAR(1.0f, out.motor_thrust[0], 0.01f); // left  = 1.0
+    CHECK_NEAR(0.4f, out.motor_thrust[1], 0.01f); // right = 0.4 (full 0.3 differential)
+    CHECK_FALSE(out.limit.roll);
     CHECK_FALSE(out.limit.pitch);
     end_test();
 }
@@ -1069,38 +1077,39 @@ void elevator_trim_schedule_at_45_degree_tilt_follows_cosine()
 // output is computed by ArduPilot but intentionally not used by the mixer.
 // ============================================================================
 
-void qstabilize_roll_stick_deflects_ailerons_with_correct_sign()
+// NOTE ON DESIGN CHANGE (Group H):
+// Originally surface_roll/surface_yaw (direct pilot stick passthrough) were intended
+// to drive ailerons/rudder respectively, while inputs.roll/yaw (closed-loop PID) drove
+// motors only.  The current design routes inputs.roll → ailerons (-inputs.roll) and
+// inputs.yaw → rudder AND rear motor differential.  surface_roll/surface_yaw are
+// populated by ArduPilot but are not consumed by the mixer in the current implementation.
+// In QSTABILIZE the pilot's stick reaches the ailerons via the attitude target → PID →
+// inputs.roll path, so the practical effect is correct, just not a direct passthrough.
+
+void qstabilize_pid_roll_drives_ailerons_and_motor_differential()
 {
-    // Pilot pushes roll-right stick (surface_roll = +0.5).
-    //   aileron_out = −surface_roll = −0.5
-    //
-    // The negative sign is critical: rolling right requires the port (left)
-    // aileron to deflect up and the starboard (right) to deflect down.  In
-    // ArduPilot's convention a negative combined aileron output achieves this.
-    //
-    // This test verifies both that the signal reaches the aileron output AND
-    // that the sign is correct.  A sign flip here would cause the aircraft to
-    // roll opposite to pilot intent — one of the most dangerous mixer bugs.
+    // inputs.roll = 0.5 (attitude PID output) drives BOTH ailerons and motor differential.
+    //   aileron_out = −inputs.roll = −0.5
+    //   wing_left > wing_right (positive roll = right-wing-down → left motor harder)
     begin_test(__func__);
     AvatarMixer  mixer;
     MixerInputs  in = neutral_copter_inputs();
-    in.surface_roll = 0.5f;
+    in.roll = 0.5f;
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(-0.5f, out.aileron_out, 0.001f); // negative: roll-right → port aileron up
-    CHECK_NEAR( 0.0f, out.rudder_out,  0.001f); // yaw unaffected
+    CHECK_NEAR(-0.5f, out.aileron_out, 0.001f);             // PID roll → aileron (negative sign)
+    CHECK_TRUE(out.motor_thrust[0] > out.motor_thrust[1]);  // motor differential active
     end_test();
 }
 
-void qstabilize_roll_stick_at_full_deflection_saturates_ailerons()
+void qstabilize_full_roll_saturates_ailerons()
 {
-    // surface_roll = 1.0 (full right stick) → aileron_out = −1.0 (full deflection).
-    // Confirms the scaling is 1:1 with no hidden gain factor.
+    // inputs.roll = 1.0 → aileron_out = −1.0. Confirms 1:1 scaling, no hidden gain.
     begin_test(__func__);
     AvatarMixer  mixer;
     MixerInputs  in = neutral_copter_inputs();
-    in.surface_roll = 1.0f;
+    in.roll = 1.0f;
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
@@ -1108,96 +1117,53 @@ void qstabilize_roll_stick_at_full_deflection_saturates_ailerons()
     end_test();
 }
 
-void qstabilize_yaw_stick_deflects_rudder_with_correct_sign()
+void qstabilize_pid_yaw_drives_rudder_and_rear_motor_differential()
 {
-    // Pilot applies right-yaw stick (surface_yaw = +0.7).
-    //   rudder_out = +surface_yaw = +0.7
-    //
-    // Unlike the aileron, the rudder output is same-sign as the stick input.
-    // On the Avatar V-tail, rudder_out drives the differential between the two
-    // V-tail surfaces (vtail_left = elevator + rudder, vtail_right = elevator − rudder)
-    // which produces a yaw moment.
+    // inputs.yaw = 0.7 drives both rudder_out and rear motor differential.
+    //   rudder_out = inputs.yaw = 0.7 (same sign)
     begin_test(__func__);
     AvatarMixer  mixer;
     MixerInputs  in = neutral_copter_inputs();
-    in.surface_yaw = 0.7f;
+    in.yaw = 0.7f;
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(0.7f, out.rudder_out,  0.001f); // same sign as stick
-    CHECK_NEAR(0.0f, out.aileron_out, 0.001f); // ailerons unaffected
+    CHECK_NEAR(0.7f, out.rudder_out,  0.001f);
+    CHECK_NEAR(0.0f, out.aileron_out, 0.001f); // ailerons unaffected by yaw
     end_test();
 }
 
-void qstabilize_pid_roll_drives_motor_differential_not_ailerons()
+void qstabilize_pid_yaw_rear_motor_differential_sign()
 {
-    // inputs.roll = 0.5 (attitude controller PID output, closed-loop)
-    // inputs.surface_roll = 0.0 (pilot stick not deflected)
-    //
-    // The closed-loop PID roll drives motor differential (left > right) for
-    // stabilization, but does NOT touch the ailerons.  The ailerons only
-    // respond to the direct pilot stick (surface_roll).
-    //
-    // This separation means: in QSTABILIZE the attitude controller can be
-    // actively fighting a disturbance via motor differential while the ailerons
-    // stay at whatever the pilot commands — the two loops do not interfere.
+    // inputs.yaw = 0.3 (yaw-right demand), wings vertical (cos_tilt = 1).
+    //   rear_thrust = (throttle − pitch) × cos_tilt = 0.5
+    //   yaw_delta   = 0.3 × 1.0 = 0.3
+    //   YAW_LEFT  (motor[3]) = rear + yaw_delta = 0.8  (left rear spins harder → yaw right)
+    //   YAW_RIGHT (motor[2]) = rear − yaw_delta = 0.2
+    //   rudder_out = inputs.yaw = 0.3
     begin_test(__func__);
     AvatarMixer  mixer;
     MixerInputs  in = neutral_copter_inputs();
-    in.roll         = 0.5f;  // PID output
-    in.surface_roll = 0.0f;  // pilot not touching roll stick
+    in.yaw = 0.3f;
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(0.0f, out.aileron_out, 0.001f);              // ailerons untouched
-    CHECK_TRUE(out.motor_thrust[0] > out.motor_thrust[1]);  // motor differential active
+    CHECK_NEAR(0.8f, out.motor_thrust[3], 0.01f); // YAW_LEFT  = rear + yaw_delta
+    CHECK_NEAR(0.2f, out.motor_thrust[2], 0.01f); // YAW_RIGHT = rear − yaw_delta
+    CHECK_NEAR(0.3f, out.rudder_out, 0.001f);     // rudder driven by PID yaw
+    CHECK_NEAR(out.motor_thrust[0], out.motor_thrust[1], 0.001f); // wings unaffected
     end_test();
 }
 
-void qstabilize_pid_yaw_drives_rear_motor_differential()
+void qstabilize_roll_and_yaw_pid_drive_surfaces_independently()
 {
-    // inputs.yaw = 0.3 (attitude controller yaw PID output), wings vertical (cos_tilt = 1).
-    // inputs.surface_yaw = 0.0 (pilot yaw stick neutral)
-    //
-    // The closed-loop yaw PID drives differential thrust between the two rear motors:
-    //   rear_thrust = (throttle - pitch) * cos_tilt = 0.5 * 1.0 = 0.5
-    //   yaw_delta   = inputs.yaw * cos_tilt = 0.3 * 1.0 = 0.3
-    //   YAW_LEFT    = 0.5 - 0.3 = 0.2
-    //   YAW_RIGHT   = 0.5 + 0.3 = 0.8
-    //
-    // Rudder is driven only by surface_yaw (pilot stick) — PID yaw does not touch it.
-    // Wing motors are unaffected by yaw.
+    // Both PID outputs active: inputs.roll = 0.3, inputs.yaw = 0.6.
+    //   aileron_out = −0.3, rudder_out = 0.6
     begin_test(__func__);
     AvatarMixer  mixer;
     MixerInputs  in = neutral_copter_inputs();
-    in.yaw         = 0.3f;  // PID yaw output
-    in.surface_yaw = 0.0f;  // pilot yaw stick neutral
-    MixerState   state;
-    MixerOutputs out;
-    mixer.mix(in, state, out);
-    CHECK_NEAR(0.2f, out.motor_thrust[3], 0.01f); // YAW_LEFT  = rear - yaw_delta
-    CHECK_NEAR(0.8f, out.motor_thrust[2], 0.01f); // YAW_RIGHT = rear + yaw_delta
-    CHECK_NEAR(0.0f, out.rudder_out, 0.001f);     // rudder not driven by PID yaw
-    CHECK_NEAR(0.0f, out.aileron_out, 0.001f);    // ailerons unaffected
-    CHECK_NEAR(out.motor_thrust[0], out.motor_thrust[1], 0.001f); // wing motors unaffected
-    end_test();
-}
-
-void qstabilize_roll_and_yaw_sticks_drive_surfaces_independently()
-{
-    // Both sticks active simultaneously: surface_roll = 0.3, surface_yaw = 0.6.
-    //   aileron_out = −0.3  (roll right → port aileron up)
-    //   rudder_out  = +0.6  (yaw right)
-    //
-    // The two surface outputs are computed from independent inputs and do not
-    // affect each other.  (V-tail mixing that combines them into vtail_left /
-    // vtail_right happens downstream in AP_Motors6DOF::output_to_motors(), not
-    // in the mixer itself.)
-    begin_test(__func__);
-    AvatarMixer  mixer;
-    MixerInputs  in = neutral_copter_inputs();
-    in.surface_roll = 0.3f;
-    in.surface_yaw  = 0.6f;
+    in.roll = 0.3f;
+    in.yaw  = 0.6f;
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
@@ -1382,8 +1348,8 @@ void plane_tilt_slew_toward_vertical_uses_rate_up_not_rate_dn()
     state.current_tilt_deg = 90.0f;     // wings horizontal
     MixerOutputs out;
     mixer.mix(in, state, out);
-    float expected_deg  = 90.0f - 120.0f * 0.5f; // = 30°
-    float expected_tilt = expected_deg / 90.0f;   // ≈ 0.333
+    float expected_deg  = 90.0f - 120.0f * 0.5f;   // = 30°
+    float expected_tilt = expected_deg / FWD_DEG;  // 30/95 ≈ 0.316
     CHECK_NEAR(expected_tilt, out.tilt_angle,         0.001f);
     CHECK_NEAR(expected_deg,  state.current_tilt_deg, 0.001f);
     end_test();
@@ -1408,8 +1374,8 @@ void plane_tilt_slew_rate_dn_zero_falls_back_to_rate_up()
     state.current_tilt_deg = 0.0f;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    float expected_deg  = 0.0f + 60.0f * 0.5f;  // = 30° (fallback to rate_up)
-    float expected_tilt = expected_deg / 90.0f;  // ≈ 0.333
+    float expected_deg  = 0.0f + 60.0f * 0.5f;    // = 30° (fallback to rate_up)
+    float expected_tilt = expected_deg / FWD_DEG;  // 30/95 ≈ 0.316
     CHECK_NEAR(expected_tilt, out.tilt_angle, 0.001f);
     end_test();
 }
@@ -1456,9 +1422,11 @@ void plane_tilt_slew_full_3_second_transition_vertical_to_horizontal()
     for (int i = 0; i < 1200; i++) { // 3 s × 400 Hz
         mixer.mix(in, state, out);
     }
-    CHECK_NEAR(1.0f, out.tilt_angle, 0.001f); // reached wings-horizontal
+    // FBWA targets cruise_physical_angle_deg (90°), not the full 95°.
+    // After 3 s at rate_dn=30°/s the servo reaches 90° and saturates there.
+    CHECK_NEAR(CRUISE_DEG / FWD_DEG, out.tilt_angle, 0.001f);
     mixer.mix(in, state, out);                 // one extra tick — no overshoot
-    CHECK_NEAR(1.0f, out.tilt_angle, 0.001f);
+    CHECK_NEAR(CRUISE_DEG / FWD_DEG, out.tilt_angle, 0.001f);
     end_test();
 }
 
@@ -1496,6 +1464,172 @@ void plane_tilt_slew_cos_tilt_computed_from_rate_limited_angle_not_target()
 }
 
 // ============================================================================
+// GROUP K — Dampening accumulation: vertical and longitudinal
+//           [AV-INVAR:sink-damp] [AV-INVAR:long-damp] [AV-INVAR:stabilize-tilt-rate-control]
+//
+// Root cause of the fixed bug:
+//   Old code ran TWO competing rate-limited moves inside mix() each frame:
+//   (1) Tilt rate control:  current_tilt_deg → pilot_tilt_deg  (rate = Q_TILT_RATE_UP * dt)
+//   (2) Dampening:          current_tilt_deg → new_tilt_deg     (rate = Q_TILT_RATE_UP * dt)
+//   When dampening pulls toward vertical and tilt rate control pulls back toward pilot,
+//   both at the same rate limit, they cancel exactly. Net per-frame movement = 0.
+//   DampThrust appeared nonzero in logs but CurrTilt tracked PilotTilt — no authority.
+//
+//   Fix: single unified slew toward the combined target (pilot_tilt when no dampening,
+//   new_tilt_deg when dampening is active). Dampening now accumulates frame-over-frame.
+//
+// IMPORTANT: these tests use finite tilt_rate_up_dps (NOT 1e6) because the cancellation
+// only manifests under a finite rate limit. With unlimited rate both old and new code snap
+// to steady-state in a single frame, masking the multi-frame accumulation bug.
+//
+// Helper: neutral STABILIZE inputs pre-positioned at a specific tilt angle.
+// ============================================================================
+
+static MixerInputs neutral_stabilize_inputs()
+{
+    MixerInputs in = neutral_plane_inputs();
+    in.plane.tilt_rate_mode    = true;    // STABILIZE, not FBWA
+    in.plane.pitch_tilt_demand = 0.0f;   // neutral stick — pilot_tilt_deg unchanged
+    in.plane.throttle_pct      = 50.0f;
+    in.tilt_rate_up_dps        = 60.0f;  // finite rate — required to expose the cancellation bug
+    in.dt                      = 0.0025f;
+    return in;
+}
+
+static MixerState state_at_tilt(float deg)
+{
+    MixerState s{};
+    s.pilot_tilt_deg   = deg;
+    s.current_tilt_deg = deg;
+    return s;
+}
+
+void stabilize_vert_damp_accumulates_across_frames()
+{
+    // Without the fix: tilt rate control snaps current back to pilot_tilt each frame
+    // after dampening moves it away. Net movement per frame = 0. After any number of
+    // frames current_tilt_deg stays within one rate-step of pilot_tilt_deg (≈ 29.85°).
+    //
+    // With the fix: single slew toward combined target (≈ 15° at these inputs).
+    // current_tilt_deg decreases by rate_clamp = 0.15° every frame.
+    // After 10 frames: 30 − 10×0.15 = 28.5° — well below the 29.0° threshold.
+    //
+    // Inputs: pilot_tilt = 30°, throttle = 0.5, damp_vert = 0.5
+    //   thrust_vert = 0.5×cos(30°) + 0.5 = 0.933
+    //   thrust_horiz = 0.5×sin(30°) = 0.25
+    //   tilt_target ≈ atan2(0.25, 0.933) ≈ 15° — well below pilot_tilt
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in    = neutral_stabilize_inputs();
+    in.plane.damp_vert_thrust = 0.5f;
+    MixerState   state = state_at_tilt(30.0f);
+    MixerOutputs out;
+    for (int i = 0; i < 10; i++) mixer.mix(in, state, out);
+    // With fix: current ≈ 28.5° — significantly below 29.0°
+    // Without fix: current ≈ 29.85° — barely below 30°, fails this check
+    CHECK_TRUE(state.current_tilt_deg < 29.0f);
+    CHECK_TRUE(state.current_tilt_deg < state.pilot_tilt_deg); // more vertical than pilot
+    end_test();
+}
+
+void stabilize_vert_damp_pilot_tilt_deg_never_modified()
+{
+    // pilot_tilt_deg is the pilot's frozen intent. Dampening must not modify it —
+    // it is used as the decomposition baseline and for recovery when dampening ends.
+    // This test confirms the invariant survives many frames of active dampening.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in    = neutral_stabilize_inputs();
+    in.plane.damp_vert_thrust = 0.5f;
+    MixerState   state = state_at_tilt(30.0f);
+    MixerOutputs out;
+    for (int i = 0; i < 20; i++) mixer.mix(in, state, out);
+    CHECK_NEAR(30.0f, state.pilot_tilt_deg, 0.001f); // invariant: dampening never touches this
+    end_test();
+}
+
+void stabilize_vert_damp_current_recovers_to_pilot_when_damp_clears()
+{
+    // After dampening has pulled current_tilt_deg away from pilot_tilt_deg, clearing
+    // damp_vert_thrust should allow current to recover back toward pilot_tilt_deg.
+    // This proves the decoupling works in both directions.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in    = neutral_stabilize_inputs();
+    in.plane.damp_vert_thrust = 0.5f;
+    MixerState   state = state_at_tilt(30.0f);
+    MixerOutputs out;
+
+    // Phase 1: run dampening for 20 frames — current should be well below pilot
+    for (int i = 0; i < 20; i++) mixer.mix(in, state, out);
+    CHECK_TRUE(state.current_tilt_deg < 29.0f); // dampening was effective
+
+    // Phase 2: clear dampening, run 20 more frames — current should climb back toward pilot
+    float current_after_damp = state.current_tilt_deg;
+    in.plane.damp_vert_thrust = 0.0f;
+    for (int i = 0; i < 20; i++) mixer.mix(in, state, out);
+    CHECK_TRUE(state.current_tilt_deg > current_after_damp); // recovering toward pilot
+    end_test();
+}
+
+void stabilize_long_damp_positive_tilts_servo_more_forward_over_time()
+{
+    // Positive damp_horiz_thrust = resist deceleration = tilt rotors more forward.
+    // Without the fix: same cancellation; current stays within one step of pilot (≈ 30.15°).
+    // With the fix: current accumulates forward at rate_clamp per frame.
+    // After 10 frames: 30 + 10×0.15 = 31.5° — above the 31.0° threshold.
+    //
+    // Inputs: pilot_tilt = 30°, throttle = 0.5, damp_horiz = 0.3
+    //   thrust_horiz = 0.5×sin(30°) + 0.3 = 0.55
+    //   thrust_vert  = 0.5×cos(30°) = 0.433
+    //   tilt_target  = atan2(0.55, 0.433) ≈ 51.8° — well above pilot_tilt
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in    = neutral_stabilize_inputs();
+    in.plane.damp_horiz_thrust = 0.3f;
+    MixerState   state = state_at_tilt(30.0f);
+    MixerOutputs out;
+    for (int i = 0; i < 10; i++) mixer.mix(in, state, out);
+    // With fix: current ≈ 31.5° — above 31.0°
+    // Without fix: current ≈ 30.15° — barely above 30°, fails this check
+    CHECK_TRUE(state.current_tilt_deg > 31.0f);
+    CHECK_TRUE(state.current_tilt_deg > state.pilot_tilt_deg); // more forward than pilot
+    end_test();
+}
+
+void stabilize_pilot_stick_retains_authority_during_dampening()
+{
+    // Run identical dampening for 100 frames: once with neutral stick, once with full
+    // forward stick. The forward-stick case must finish noticeably more horizontal,
+    // proving the pilot is not locked out by active dampening.
+    //
+    // Neutral (100 frames): pilot stays at 30°, tilt_target ≈ 15°.
+    //   current slews from 30° toward 15° at 0.15°/frame → ≈ 15° after 100 frames.
+    // Forward stick (100 frames): pilot increases 0.15°/frame → reaches ~45°.
+    //   tilt_target also shifts forward (≈ 22° at pilot=45°).
+    //   current chases the moving target → lands significantly above neutral case.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in_base = neutral_stabilize_inputs();
+    in_base.plane.damp_vert_thrust = 0.5f;
+    MixerOutputs out;
+
+    MixerInputs  in_neutral = in_base;
+    in_neutral.plane.pitch_tilt_demand = 0.0f;
+    MixerState   state_neutral = state_at_tilt(30.0f);
+    for (int i = 0; i < 100; i++) mixer.mix(in_neutral, state_neutral, out);
+
+    MixerInputs  in_fwd = in_base;
+    in_fwd.plane.pitch_tilt_demand = -1.0f; // full forward stick
+    MixerState   state_fwd = state_at_tilt(30.0f);
+    for (int i = 0; i < 100; i++) mixer.mix(in_fwd, state_fwd, out);
+
+    // Forward stick should produce a current_tilt_deg at least 3° more horizontal
+    CHECK_TRUE(state_fwd.current_tilt_deg > state_neutral.current_tilt_deg + 3.0f);
+    end_test();
+}
+
+// ============================================================================
 // LAYER 4: BlimpMixer — PLANE MODE
 //
 // Active config: forward_flight_physical_angle_deg = 90°, handoff_point = 0.5
@@ -1506,7 +1640,7 @@ void plane_tilt_slew_cos_tilt_computed_from_rate_limited_angle_not_target()
 void blimp_plane_neutral_stick_gives_full_forward_tilt()
 {
     // elevator_input = 0 → pitch_in = 0 → elevator_out = 0, tilt_delta = 0
-    // tilt_angle = val_neutral = 1.0 (full forward)
+    // tilt_angle = val_neutral = BLIMP_PLANE_FWD_ANGLE / FWD_DEG = 90/95 ≈ 0.9474
     begin_test(__func__);
     BlimpMixer   mixer;
     MixerInputs  in = neutral_plane_inputs();
@@ -1514,7 +1648,7 @@ void blimp_plane_neutral_stick_gives_full_forward_tilt()
     MixerState   state;
     MixerOutputs out;
     mixer.mix(in, state, out);
-    CHECK_NEAR(1.0f,  out.tilt_angle,   0.001f);
+    CHECK_NEAR(CRUISE_DEG / FWD_DEG, out.tilt_angle, 0.001f);
     CHECK_NEAR(0.0f,  out.elevator_out, 0.001f);
     end_test();
 }
@@ -1702,8 +1836,8 @@ int main()
 
     std::printf("\n-- Group D: Roll headroom --\n");
     roll_headroom_at_half_throttle_allows_full_roll_within_margin();
-    roll_headroom_zero_at_full_throttle_clips_roll_to_zero();
-    pitch_correction_shifts_base_thrust_and_narrows_roll_headroom();
+    roll_headroom_full_throttle_desaturates_by_shifting_both_motors_down();
+    pitch_correction_with_roll_desaturates_symmetrically();
 
     std::printf("\n-- Group E: Plane mode rear motor under pitch pressure --\n");
     plane_mode_rear_motor_surges_when_elevator_saturates_nose_up();
@@ -1716,12 +1850,11 @@ int main()
     elevator_trim_schedule_at_45_degree_tilt_follows_cosine();
 
     std::printf("\n-- Group H: QSTABILIZE surface controls --\n");
-    qstabilize_roll_stick_deflects_ailerons_with_correct_sign();
-    qstabilize_roll_stick_at_full_deflection_saturates_ailerons();
-    qstabilize_yaw_stick_deflects_rudder_with_correct_sign();
-    qstabilize_pid_roll_drives_motor_differential_not_ailerons();
-    qstabilize_pid_yaw_drives_rear_motor_differential();
-    qstabilize_roll_and_yaw_sticks_drive_surfaces_independently();
+    qstabilize_pid_roll_drives_ailerons_and_motor_differential();
+    qstabilize_full_roll_saturates_ailerons();
+    qstabilize_pid_yaw_drives_rudder_and_rear_motor_differential();
+    qstabilize_pid_yaw_rear_motor_differential_sign();
+    qstabilize_roll_and_yaw_pid_drive_surfaces_independently();
 
     std::printf("\n-- Group I: Aircraft pitch state -> motor hierarchy --\n");
     nose_up_aircraft_rear_motor_produces_more_thrust_than_front();
@@ -1735,6 +1868,13 @@ int main()
     plane_tilt_slew_state_persists_across_calls_accumulates_two_steps();
     plane_tilt_slew_full_3_second_transition_vertical_to_horizontal();
     plane_tilt_slew_cos_tilt_computed_from_rate_limited_angle_not_target();
+
+    std::printf("\n-- Group K: Dampening accumulation [AV-INVAR:sink-damp] [AV-INVAR:long-damp] --\n");
+    stabilize_vert_damp_accumulates_across_frames();
+    stabilize_vert_damp_pilot_tilt_deg_never_modified();
+    stabilize_vert_damp_current_recovers_to_pilot_when_damp_clears();
+    stabilize_long_damp_positive_tilts_servo_more_forward_over_time();
+    stabilize_pilot_stick_retains_authority_during_dampening();
 
     std::printf("\n-- Layer 4: BlimpMixer plane mode --\n");
     blimp_plane_neutral_stick_gives_full_forward_tilt();

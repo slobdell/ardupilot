@@ -113,7 +113,9 @@ struct MixerOutputs {
 // --- Persistent State ---
 struct MixerState {
     float current_tilt_deg;
-    float pilot_tilt_deg;   // pilot's commanded tilt — only moved by stick, never by dampening
+    float pilot_tilt_deg;       // pilot's commanded tilt — only moved by stick, never by dampening
+    float last_copter_throttle; // last wing-motor base throttle from copter mode — used to blend at copter→plane transition
+    float copter_to_plane_blend;// 0 = use last_copter_throttle, 1 = fully on plane throttle (ramps up over 0.5 s)
     bool manual_override_active;
     bool pitch_saturated;
     bool roll_saturated;
@@ -129,6 +131,8 @@ struct MixerState {
     MixerState() :
         current_tilt_deg(0.0f),
         pilot_tilt_deg(0.0f),
+        last_copter_throttle(0.5f),
+        copter_to_plane_blend(1.0f),
         manual_override_active(false),
         pitch_saturated(false),
         roll_saturated(false),
