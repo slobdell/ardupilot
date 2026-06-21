@@ -394,6 +394,7 @@ void AP_Motors6DOF::output_armed_stabilizing()
     mixer_in.plane.tilt_rate_mode    = _plane_inputs.tilt_rate_mode;
     mixer_in.plane.use_pid_yaw       = _plane_inputs.use_pid_yaw;
     mixer_in.plane.damp_vert_thrust  = _plane_inputs.damp_vert_thrust;
+    mixer_in.plane.damp_horiz_thrust = _plane_inputs.damp_horiz_thrust;
     mixer_in.dt = _dt;
     mixer_in.spool_state = _spool_state;
     mixer_in.is_armed = armed();

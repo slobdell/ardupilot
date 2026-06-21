@@ -579,6 +579,23 @@ const AP_Param::GroupInfo QuadPlane::var_info2[] = {
     // @User: Standard
     AP_GROUPINFO("STAB_PTCH_DEG", 43, QuadPlane, _stab_pitch_deg, 3.0f),
 
+    // @Param: DAMP_LONG
+    // @DisplayName: Longitudinal acceleration damping gain
+    // @Description: Damping gain to counteract forward/reverse acceleration in STABILIZE plane mode by tilting rotors. Feeds back gravity-corrected body-X acceleration as a horizontal thrust demand into the force-vector decomposition. 0 = disabled.
+    // @Range: 0.0 0.5
+    // @Increment: 0.05
+    // @User: Standard
+    AP_GROUPINFO("DAMP_LONG", 44, QuadPlane, damp_long_gain, 0.0f),
+
+    // @Param: DAMP_LONG_FILT
+    // @DisplayName: Longitudinal damping filter frequency
+    // @Description: Low-pass filter cut-off frequency (Hz) for body-X acceleration used in longitudinal damping. Lower values smooth out noise but increase lag.
+    // @Range: 0.5 10.0
+    // @Increment: 0.5
+    // @Units: Hz
+    // @User: Standard
+    AP_GROUPINFO("DAMP_LONG_FILT", 45, QuadPlane, damp_long_filt_hz, 2.0f),
+
     AP_GROUPEND
 };
 
@@ -1751,6 +1768,50 @@ void QuadPlane::update(void)
             avatar_sink_rate = fmaxf(0.0f, av_filt_vz);
         }
     }
+
+    // [AV-INVAR:long-damp] — see Avatar_Design.md § 9
+    float avatar_long_damp_thrust = 0.0f;
+    float av_raw_ax  = 0.0f;
+    float av_filt_ax = 0.0f;
+    if (plane.is_flying() && !in_vtol_mode() && (plane.control_mode == &plane.mode_stabilize)) {
+        const float dt = AP::scheduler().get_loop_period_s();
+
+        // Stick-activity fading: fade out within 100 ms of stick movement, recover over 500 ms at centre.
+        // Prevents the dampener from fighting deliberate pilot speed changes.
+        const float pitch_stick = plane.channel_pitch->norm_input_dz();
+        if (fabsf(pitch_stick) > 0.05f) {
+            _damp_long_fade_factor = fmaxf(0.0f, _damp_long_fade_factor - dt / 0.1f);
+        } else {
+            _damp_long_fade_factor = fminf(1.0f, _damp_long_fade_factor + dt / 0.5f);
+        }
+
+        if (damp_long_gain > 0.0f) {
+            // Gravity-corrected body-X acceleration from EKF — free of gravity coupling
+            // from small fuselage pitch angles. getCorrectedDeltaVelocityNED returns
+            // earth-frame delta-v; rotate back to body frame via transpose of rotation matrix.
+            Vector3f corrected_dv;
+            float dv_dt;
+            AP::ahrs().getCorrectedDeltaVelocityNED(corrected_dv, dv_dt);
+            if (dv_dt > 0.0f) {
+                Vector3f accel_ef = corrected_dv / dv_dt;
+                const Matrix3f &rot_body_to_ned = AP::ahrs().get_rotation_body_to_ned();
+                Vector3f accel_bf = rot_body_to_ned.mul_transpose(accel_ef);
+                av_raw_ax = accel_bf.x;
+
+                // Update filter cutoff if parameter changed
+                static float last_filt_hz = -1.0f;
+                if (!is_equal(last_filt_hz, damp_long_filt_hz.get())) {
+                    last_filt_hz = damp_long_filt_hz.get();
+                    _damp_long_accel_filter.set_cutoff_frequency(1.0f / dt, fmaxf(0.1f, last_filt_hz));
+                }
+
+                av_filt_ax = _damp_long_accel_filter.apply(av_raw_ax);
+                avatar_long_damp_thrust = -av_filt_ax * damp_long_gain * _damp_long_fade_factor;
+            }
+        }
+    } else {
+        _damp_long_fade_factor = 1.0f;
+    }
 #endif
 
 #if ENABLE_TRICOPTER_VTOL_BACKEND
@@ -1774,7 +1835,9 @@ void QuadPlane::update(void)
         }
         plane_inputs.throttle_pct = throttle_pct;
         // [AV-INVAR:sink-damp] — see Avatar_Design.md § 9
-        plane_inputs.damp_vert_thrust = avatar_sink_rate * damp_vert_gain;
+        plane_inputs.damp_vert_thrust  = avatar_sink_rate * damp_vert_gain;
+        // [AV-INVAR:long-damp] — see Avatar_Design.md § 9
+        plane_inputs.damp_horiz_thrust = avatar_long_damp_thrust;
         const float av_pilot_tilt = ((AP_Motors6DOF*)motors)->get_pilot_tilt_deg();
         const float av_curr_tilt  = ((AP_Motors6DOF*)motors)->get_tilt_deg();
         {
@@ -1790,15 +1853,19 @@ void QuadPlane::update(void)
             }
         }
         AP::logger().WriteStreaming("AVSD",
-                                   "TimeUS,RawVZ,FiltVZ,SinkRate,DampThrust,PilotTilt,CurrTilt",
-                                   "Qffffff",
+                                   "TimeUS,RawVZ,FiltVZ,SinkRate,DampThrust,PilotTilt,CurrTilt,RawAX,FiltAX,DampFade,DampFX",
+                                   "Qffffffffff",
                                    AP_HAL::micros64(),
                                    (double)av_raw_vz,
                                    (double)av_filt_vz,
                                    (double)avatar_sink_rate,
                                    (double)plane_inputs.damp_vert_thrust,
                                    (double)av_pilot_tilt,
-                                   (double)av_curr_tilt);
+                                   (double)av_curr_tilt,
+                                   (double)av_raw_ax,
+                                   (double)av_filt_ax,
+                                   (double)_damp_long_fade_factor,
+                                   (double)plane_inputs.damp_horiz_thrust);
 
         plane_inputs.rudder_input = SRV_Channels::get_output_scaled(SRV_Channel::k_rudder);
         plane_inputs.aileron_input = SRV_Channels::get_output_scaled(SRV_Channel::k_aileron);

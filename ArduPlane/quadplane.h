@@ -623,6 +623,10 @@ private:
     AP_Float _stab_pitch_deg;
 #if ENABLE_TRICOPTER_VTOL_BACKEND
     LowPassFilter2pFloat _damp_vert_vel_filter{400.0f, 0.5f};
+    AP_Float damp_long_gain;
+    AP_Float damp_long_filt_hz;
+    LowPassFilter2pFloat _damp_long_accel_filter{400.0f, 2.0f};
+    float _damp_long_fade_factor = 1.0f;
 #endif
 
     AP_Float takeoff_failure_scalar;

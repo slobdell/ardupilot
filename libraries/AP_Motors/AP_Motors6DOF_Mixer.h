@@ -64,6 +64,7 @@ struct MixerInputs {
         bool  tilt_rate_mode;      // true = pitch_tilt_demand is a rate command (STABILIZE); false = position demand (FBWA/auto)
         bool  use_pid_yaw;         // [AV-INVAR:stabilize-yaw-pid] true = use inputs.yaw (copter PID); false = use rudder_input (raw stick)
         float damp_vert_thrust;    // [AV-INVAR:sink-damp] vertical thrust addition (0..1 scale); mixer decomposes into tilt-back + throttle boost
+        float damp_horiz_thrust;   // [AV-INVAR:long-damp] horizontal thrust addition (-1..1 scale); mixer decomposes into tilt-fwd/back + throttle
     } plane;
 
     // System Perception

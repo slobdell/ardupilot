@@ -106,35 +106,53 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
 
         float throttle_pct = inputs.plane.throttle_pct * 0.01f;
 
-        // [AV-INVAR:sink-damp] — see Avatar_Design.md § 9
-        // Force-vector decomposition: add a vertical thrust demand, then recompose to derive
-        // a new tilt angle (tilted back toward vertical) and new total throttle magnitude.
-        // This is more effective than a raw throttle boost at near-horizontal tilt because
-        // tilt-back exponentially increases the vertical component of existing thrust.
-        // Rate-capped to Q_TILT_RATE_UP so the servo is never commanded faster than it can move.
-        if (inputs.plane.damp_vert_thrust > 0.0f) {
+        // [AV-INVAR:sink-damp] and [AV-INVAR:long-damp] — see Avatar_Design.md § 9
+        // Unified force-vector decomposition: vertical and horizontal damping forces are added
+        // to the pilot-intent thrust vector. The decomposition produces a new tilt angle and a
+        // new throttle magnitude that together preserve the original forward component while
+        // delivering the additional demanded vertical (and/or horizontal) thrust.
+        //
+        // Throttle intent: new_throttle is the strictly additive, geometrically correct magnitude
+        // for the FULL demanded force vector at the TARGET tilt angle. It is NOT computed for the
+        // current servo position. During the servo slew the actual vertical thrust produced is
+        // slightly less than desired (the servo is still more horizontal than the target), but
+        // this is intentional — the only way to add vertical thrust at the CURRENT forward angle
+        // without also adding undesired forward thrust is to tilt first. Adjusting throttle to
+        // compensate during the slew would increase both vertical AND forward thrust proportionally
+        // (since sin/cos both scale with throttle at a fixed angle), worsening the sink if the
+        // aircraft is already descending due to excess forward tilt. The correct authority over
+        // purely vertical thrust only materialises once the servo reaches the target angle.
+        // The real limit is Q_TILT_RATE_UP — a faster servo slew is the correct lever to pull
+        // if dampening authority during the transition is insufficient.
+        const bool has_vert_damp  = (inputs.plane.damp_vert_thrust  > 0.0f);
+        const bool has_horiz_damp = (fabsf(inputs.plane.damp_horiz_thrust) > 1e-4f);
+        if (has_vert_damp || has_horiz_damp) {
             // Decompose from pilot intent, not the already-dampened servo position.
             // Dampening is additive on top of what the pilot wants — compounding off
             // current_tilt_deg would progressively erode the forward component across frames.
             float sin_t = sinf(radians(state.pilot_tilt_deg));
             float cos_t = cosf(radians(state.pilot_tilt_deg));
-            float thrust_horiz = throttle_pct * sin_t;
+            float thrust_horiz = throttle_pct * sin_t + inputs.plane.damp_horiz_thrust;
             float thrust_vert  = throttle_pct * cos_t + inputs.plane.damp_vert_thrust;
             float new_throttle = sqrtf(thrust_horiz * thrust_horiz + thrust_vert * thrust_vert);
             float new_tilt_deg;
             if (new_throttle > 1.0f) {
-                // Saturated: preserve vertical, sacrifice forward thrust for remaining headroom
-                float vert_clamped = fminf(thrust_vert, 1.0f);
-                float horiz_remaining = sqrtf(fmaxf(0.0f, 1.0f - vert_clamped * vert_clamped));
-                new_tilt_deg = degrees(atan2f(horiz_remaining, vert_clamped));
+                // Saturated: preserve vertical lift, allocate remaining headroom to horizontal.
+                // copysignf preserves the direction of the horizontal demand (forward vs. backward tilt).
+                float thrust_vert_clamped = constrain_float(thrust_vert, 0.0f, 1.0f);
+                float horiz_remaining     = sqrtf(fmaxf(0.0f, 1.0f - thrust_vert_clamped * thrust_vert_clamped));
+                float horiz_clamped       = copysignf(horiz_remaining, thrust_horiz);
+                new_tilt_deg = degrees(atan2f(horiz_clamped, thrust_vert_clamped));
                 throttle_pct = 1.0f;
             } else {
                 new_tilt_deg = degrees(atan2f(thrust_horiz, thrust_vert));
                 throttle_pct = new_throttle;
             }
-            new_tilt_deg = constrain_float(new_tilt_deg, 0.0f, g_config.forward_flight_physical_angle_deg);
-            float max_tilt_back = inputs.tilt_rate_up_dps * inputs.dt;
-            state.current_tilt_deg -= constrain_float(state.current_tilt_deg - new_tilt_deg, 0.0f, max_tilt_back);
+            new_tilt_deg = constrain_float(new_tilt_deg, g_config.reverse_flight_physical_angle_deg, g_config.forward_flight_physical_angle_deg);
+            // Bidirectional rate limit: longitudinal damp can tilt forward OR back.
+            float max_rate   = inputs.tilt_rate_up_dps * inputs.dt;
+            float delta_tilt = constrain_float(new_tilt_deg - state.current_tilt_deg, -max_rate, max_rate);
+            state.current_tilt_deg += delta_tilt;
             outputs.tilt_angle = state.current_tilt_deg >= 0.0f
                 ? state.current_tilt_deg / g_config.forward_flight_physical_angle_deg
                 : state.current_tilt_deg / fabsf(g_config.reverse_flight_physical_angle_deg);
@@ -253,6 +271,12 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
             state.current_tilt_deg + (tilt_rate * inputs.dt));
         float error_deg = fabsf(state.current_tilt_deg - target_deg);
         throttle_thrust *= constrain_float(cosf(radians(error_deg)), 0.0f, 1.0f);
+        // TODO: this cos(error) scaling reduces throttle symmetrically regardless of which
+        // direction the servo is traveling. When the servo is heading toward vertical (braking/
+        // deceleration), the servo is more horizontal than the target and vertical thrust is
+        // under-produced — scaling down makes it worse. The correct fix mirrors the plane-mode
+        // dampening approach: throttle = desired_vert / cos(state.current_tilt_deg). Tolerable
+        // here because the altitude controller closes the loop; plane mode has no such fallback.
 
         // cos_tilt is floored at zero so that roll effectiveness and rear motor
         // fade to zero at 90° and stay there if servo range extends past 90°.
