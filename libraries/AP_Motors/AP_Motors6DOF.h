@@ -62,6 +62,8 @@ public:
 
     // Current tilt angle in degrees (0 = rotors vertical/hover, 90 = horizontal/forward flight)
     float get_tilt_deg() const { return _mixer_state.current_tilt_deg; }
+    // Pilot-intended tilt angle — only moves from stick input, never from dampening
+    float get_pilot_tilt_deg() const { return _mixer_state.pilot_tilt_deg; }
 
     // output_min - sends minimum values out to the motors
     void output_min() override;

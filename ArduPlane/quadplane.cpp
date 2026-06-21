@@ -570,6 +570,15 @@ const AP_Param::GroupInfo QuadPlane::var_info2[] = {
     // @User: Standard
     AP_GROUPINFO("TILT_EXPO", 42, QuadPlane, _tilt_expo, 0.3f),
 
+    // @Param: STAB_PTCH_DEG
+    // @DisplayName: STABILIZE target pitch
+    // @Description: Target fuselage pitch angle in degrees in STABILIZE plane mode. Positive = nose up. A small positive value (e.g. 3 deg) improves aerodynamic efficiency when hovering into or with the wind. Has no effect in FBWA or other plane modes, which use their own pitch demand.
+    // @Range: -10.0 10.0
+    // @Increment: 0.5
+    // @Units: deg
+    // @User: Standard
+    AP_GROUPINFO("STAB_PTCH_DEG", 43, QuadPlane, _stab_pitch_deg, 3.0f),
+
     AP_GROUPEND
 };
 
@@ -1766,14 +1775,30 @@ void QuadPlane::update(void)
         plane_inputs.throttle_pct = throttle_pct;
         // [AV-INVAR:sink-damp] — see Avatar_Design.md § 9
         plane_inputs.damp_vert_thrust = avatar_sink_rate * damp_vert_gain;
+        const float av_pilot_tilt = ((AP_Motors6DOF*)motors)->get_pilot_tilt_deg();
+        const float av_curr_tilt  = ((AP_Motors6DOF*)motors)->get_tilt_deg();
+        {
+            static uint32_t last_tilt_dbg_ms = 0;
+            const uint32_t now_ms = AP_HAL::millis();
+            if (now_ms - last_tilt_dbg_ms >= 500) {
+                last_tilt_dbg_ms = now_ms;
+                gcs().send_text(MAV_SEVERITY_INFO,
+                    "TILT pilot=%.1f curr=%.1f demand=%.2f",
+                    (double)av_pilot_tilt,
+                    (double)av_curr_tilt,
+                    (double)plane_inputs.pitch_tilt_demand);
+            }
+        }
         AP::logger().WriteStreaming("AVSD",
-                                   "TimeUS,RawVZ,FiltVZ,SinkRate,DampThrust",
-                                   "Qffff",
+                                   "TimeUS,RawVZ,FiltVZ,SinkRate,DampThrust,PilotTilt,CurrTilt",
+                                   "Qffffff",
                                    AP_HAL::micros64(),
                                    (double)av_raw_vz,
                                    (double)av_filt_vz,
                                    (double)avatar_sink_rate,
-                                   (double)plane_inputs.damp_vert_thrust);
+                                   (double)plane_inputs.damp_vert_thrust,
+                                   (double)av_pilot_tilt,
+                                   (double)av_curr_tilt);
 
         plane_inputs.rudder_input = SRV_Channels::get_output_scaled(SRV_Channel::k_rudder);
         plane_inputs.aileron_input = SRV_Channels::get_output_scaled(SRV_Channel::k_aileron);
@@ -1892,7 +1917,10 @@ void QuadPlane::update(void)
                 if (i_scale < 1.0f) {
                     pitch_pid.set_integrator(pitch_pid.get_i() * i_scale);
                 }
-                const float pitch_error_rad = -ahrs.get_pitch();  // 0° - actual_pitch
+                const float pitch_target_rad = (plane.control_mode == &plane.mode_stabilize)
+                    ? radians(_stab_pitch_deg)
+                    : 0.0f;
+                const float pitch_error_rad = pitch_target_rad - ahrs.get_pitch();
                 const float pitch_kP = attitude_control->get_angle_pitch_p().kP();
                 const float pitch_rate_cds = degrees(pitch_kP * pitch_error_rad) * 100.0f;
                 attitude_control->rate_bf_pitch_target(pitch_rate_cds);

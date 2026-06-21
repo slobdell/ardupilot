@@ -94,7 +94,9 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
                     state.current_tilt_deg - (rate_up * inputs.dt),   // toward vertical: fast
                     state.current_tilt_deg + (rate_dn * inputs.dt));  // toward horizontal: slow
             }
-            outputs.tilt_angle = state.current_tilt_deg / g_config.forward_flight_physical_angle_deg;
+            outputs.tilt_angle = state.current_tilt_deg >= 0.0f
+                ? state.current_tilt_deg / g_config.forward_flight_physical_angle_deg
+                : state.current_tilt_deg / fabsf(g_config.reverse_flight_physical_angle_deg);
         }
 
         // Elevator: copter attitude PID output — same signal and same sign as the rear motor.
@@ -111,8 +113,11 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // tilt-back exponentially increases the vertical component of existing thrust.
         // Rate-capped to Q_TILT_RATE_UP so the servo is never commanded faster than it can move.
         if (inputs.plane.damp_vert_thrust > 0.0f) {
-            float sin_t = sinf(radians(state.current_tilt_deg));
-            float cos_t = cosf(radians(state.current_tilt_deg));
+            // Decompose from pilot intent, not the already-dampened servo position.
+            // Dampening is additive on top of what the pilot wants — compounding off
+            // current_tilt_deg would progressively erode the forward component across frames.
+            float sin_t = sinf(radians(state.pilot_tilt_deg));
+            float cos_t = cosf(radians(state.pilot_tilt_deg));
             float thrust_horiz = throttle_pct * sin_t;
             float thrust_vert  = throttle_pct * cos_t + inputs.plane.damp_vert_thrust;
             float new_throttle = sqrtf(thrust_horiz * thrust_horiz + thrust_vert * thrust_vert);
@@ -130,19 +135,25 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
             new_tilt_deg = constrain_float(new_tilt_deg, 0.0f, g_config.forward_flight_physical_angle_deg);
             float max_tilt_back = inputs.tilt_rate_up_dps * inputs.dt;
             state.current_tilt_deg -= constrain_float(state.current_tilt_deg - new_tilt_deg, 0.0f, max_tilt_back);
-            outputs.tilt_angle = state.current_tilt_deg / g_config.forward_flight_physical_angle_deg;
+            outputs.tilt_angle = state.current_tilt_deg >= 0.0f
+                ? state.current_tilt_deg / g_config.forward_flight_physical_angle_deg
+                : state.current_tilt_deg / fabsf(g_config.reverse_flight_physical_angle_deg);
         }
 
         // cos(tilt): 1 at wings-vertical (hover), 0 at wings-horizontal (cruise).
         // Scales both motor roll differential and rear motor — authority fades as
         // aerodynamic surfaces (ailerons, elevator) take over through the transition.
-        float tilt_deg_b = outputs.tilt_angle * g_config.forward_flight_physical_angle_deg;
-        float cos_tilt_b = fmaxf(0.0f, cosf(radians(tilt_deg_b)));
+        float cos_tilt_b = fmaxf(0.0f, cosf(radians(state.current_tilt_deg)));
         // Roll: copter attitude controller differential, same input and tuning as copter mode.
         // Fades to zero at wings-horizontal where aileron authority is full.
-        float roll_delta = inputs.roll * cos_tilt_b;
-        outputs.motor_thrust[AVATAR_MOT_WING_LEFT]  = throttle_pct + roll_delta;
-        outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = throttle_pct - roll_delta;
+        float roll_delta  = inputs.roll * cos_tilt_b;
+        float p_left_raw  = throttle_pct + roll_delta;
+        float p_right_raw = throttle_pct - roll_delta;
+        float p_excess_high = fmaxf(0.0f, fmaxf(p_left_raw, p_right_raw) - 1.0f);
+        float p_excess_low  = fmaxf(0.0f, -fminf(p_left_raw, p_right_raw));
+        float p_shift = p_excess_high - p_excess_low;
+        outputs.motor_thrust[AVATAR_MOT_WING_LEFT]  = constrain_float(p_left_raw  - p_shift, 0.0f, 1.0f);
+        outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = constrain_float(p_right_raw - p_shift, 0.0f, 1.0f);
         outputs.aileron_out  = -inputs.plane.aileron_input / 4500.0f;
         float rear_demand = (throttle_pct - inputs.pitch) * cos_tilt_b;
         outputs.limit.pitch = (rear_demand > 1.0f || rear_demand < 0.0f);
@@ -255,12 +266,20 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         float base_thrust = throttle_thrust + inputs.pitch;
         outputs.limit.pitch = (base_thrust > 1.0f || base_thrust < 0.0f);
         base_thrust = constrain_float(base_thrust, 0.0f, 1.0f);
-        float roll_headroom = fminf(1.0f - base_thrust, base_thrust);
         float desired_roll = inputs.roll * roll_effectiveness;
-        float scaled_roll = constrain_float(desired_roll, -roll_headroom, roll_headroom);
-        outputs.limit.roll = (fabsf(desired_roll) > roll_headroom);
-        outputs.motor_thrust[AVATAR_MOT_WING_LEFT]  = base_thrust + scaled_roll;
-        outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = base_thrust - scaled_roll;
+        // De-saturate by shifting both motors equally so the roll differential is
+        // preserved even when throttle has pushed base_thrust to 1.0. Sacrifices
+        // total thrust headroom rather than silencing roll authority entirely.
+        float left_raw    = base_thrust + desired_roll;
+        float right_raw   = base_thrust - desired_roll;
+        float excess_high = fmaxf(0.0f, fmaxf(left_raw, right_raw) - 1.0f);
+        float excess_low  = fmaxf(0.0f, -fminf(left_raw, right_raw));
+        float shift = excess_high - excess_low;
+        float left_out  = constrain_float(left_raw  - shift, 0.0f, 1.0f);
+        float right_out = constrain_float(right_raw - shift, 0.0f, 1.0f);
+        outputs.limit.roll = (fabsf(desired_roll) > fabsf(left_out - right_out) / 2.0f + 1e-4f);
+        outputs.motor_thrust[AVATAR_MOT_WING_LEFT]  = left_out;
+        outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = right_out;
         // Rear motors fade to zero at 90° and stay off beyond — fixed-direction thrust
         // loses pitch relevance (and would invert without the floor) past 90°.
         // Yaw: attitude PID output drives differential between the two rear motors, fading

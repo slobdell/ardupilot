@@ -620,6 +620,7 @@ private:
     // [AV-INVAR:sink-damp] — see Avatar_Design.md § 9
     AP_Float damp_vert_gain;
     AP_Float _tilt_expo;
+    AP_Float _stab_pitch_deg;
 #if ENABLE_TRICOPTER_VTOL_BACKEND
     LowPassFilter2pFloat _damp_vert_vel_filter{400.0f, 0.5f};
 #endif
