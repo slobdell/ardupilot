@@ -1784,10 +1784,28 @@ void QuadPlane::update(void)
     if (plane.is_flying() && !in_vtol_mode() && (plane.control_mode == &plane.mode_stabilize)) {
         const float dt = AP::scheduler().get_loop_period_s();
 
-        // Stick-activity fading: fade out within 100 ms of stick movement, recover over 500 ms at centre.
-        // Prevents the dampener from fighting deliberate pilot speed changes.
+        // Stick-activity fading: fade out within 100 ms of any deliberate stick movement
+        // (pitch OR throttle), recover over 500 ms at centre — see Avatar_Design.md § 9
+        // [AV-INVAR:vel-damp].
         const float pitch_stick = plane.channel_pitch->norm_input_dz();
-        if (fabsf(pitch_stick) > 0.05f) {
+        const bool pitch_active = fabsf(pitch_stick) > 0.05f;
+
+        // Throttle activity: detect movement by rate-of-change with a 200 ms latch —
+        // see Avatar_Design.md § 9 [AV-INVAR:vel-damp].
+        // Rate-of-change (not absolute position) is used because throttle is not a centred stick.
+        // The latch bridges the gap between RC updates (~50 Hz) and the 400 Hz control loop.
+        constexpr float THROTTLE_DELTA_THRESHOLD = 0.02f; // ~20 µs on a 1000 µs range
+        constexpr float THROTTLE_ACTIVE_LATCH_S  = 0.20f;
+        const float throttle_norm = plane.channel_throttle->norm_input();
+        if (fabsf(throttle_norm - _last_throttle_norm) > THROTTLE_DELTA_THRESHOLD) {
+            _throttle_active_s = THROTTLE_ACTIVE_LATCH_S;
+        } else {
+            _throttle_active_s = fmaxf(0.0f, _throttle_active_s - dt);
+        }
+        _last_throttle_norm = throttle_norm;
+        const bool throttle_active = _throttle_active_s > 0.0f;
+
+        if (pitch_active || throttle_active) {
             _damp_long_fade_factor = fmaxf(0.0f, _damp_long_fade_factor - dt / 0.1f);
         } else {
             _damp_long_fade_factor = fminf(1.0f, _damp_long_fade_factor + dt / 0.5f);
@@ -1831,11 +1849,12 @@ void QuadPlane::update(void)
             const Vector3f vel_bf = rot_body_to_ned.mul_transpose(vel_ned);
             av_vel_bf_x = vel_bf.x;
             const float pitch_stick = plane.channel_pitch->norm_input_dz();
+            const bool any_stick_active = fabsf(pitch_stick) > 0.05f || _throttle_active_s > 0.0f;
             // Saturation guard: freeze hold target when motors are maxed — see Avatar_Design.md § 9
             // [AV-INVAR:vel-damp].
             const float throttle_out = motors->get_throttle();
             const bool motors_saturated = throttle_out >= 0.95f;
-            if (fabsf(pitch_stick) > 0.05f && !motors_saturated) {
+            if (any_stick_active && !motors_saturated) {
                 // Slew-rate limit the hold target so a brief stick touch never teleports
                 // VxHld to a speed far from the current target — see Avatar_Design.md § 9
                 // [AV-INVAR:vel-damp].

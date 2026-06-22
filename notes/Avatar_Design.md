@@ -881,6 +881,8 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 **Why shared fade factor:** Both dampeners must yield simultaneously to pilot stick input. Using independent fades would allow one to remain active while the other zeroes, producing an asymmetric thrust demand that fights the pilot.
 
+**Throttle activity detection:** The fade factor and VxHld slew gate respond to throttle stick movement as well as pitch stick movement. Throttle position is not a centred stick, so activity is detected by rate-of-change: if `abs(throttle_norm - last_throttle_norm) > 0.02` (~20 µs), a 200 ms latch (`_throttle_active_s`) is set. The latch bridges the gap between RC updates (~50 Hz) and the 400 Hz control loop so a single detected movement holds the active state long enough for the fade to fully suppress the correction. While either stick is active, `_vel_hold_target` slews toward current velocity so that release always snapshots a speed close to the new equilibrium.
+
 **Why snapshot rather than zero target:** Zero target would actively decelerate the aircraft during normal forward cruise whenever the pilot releases the stick — fighting intentional flight. The snapshot captures pilot intent at the moment of release and holds it, correcting only deviations from that speed caused by wind or disturbances.
 
 **Why P-only:** I-term would wind up against a steady headwind, producing a constant backward tilt that surprises the pilot when the wind drops. D-term would differentiate velocity = acceleration, reintroducing the phase-lag instability of `[AV-INVAR:long-damp]`.

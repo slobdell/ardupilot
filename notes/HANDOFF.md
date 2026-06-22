@@ -165,12 +165,82 @@ Q_WVANE_GAIN    = 1.0         (weathervaning active in QLOITER)
 
 ---
 
+## STABILIZE Dampening — Q_DAMP_VEL (June 21, 2026)
+
+Custom velocity-hold dampener for STABILIZE plane mode. Replaces the oscillation-prone acceleration-based `Q_DAMP_LONG` (now set to 0).
+
+### How it works
+P controller on body-frame forward velocity error. When the pitch stick returns to neutral, the controller snapshots the current forward speed as the hold target. Correction = `-(vel_bf_x - hold_target) × Q_DAMP_VEL × fade`. When the stick is active, the hold target slews toward current velocity (rate-limited to 0.5 m/s²) so release always anchors near the current speed. Same stick-fade logic as Q_DAMP_LONG (100ms fade-out, 500ms recovery). **Throttle stick activity is also detected** (rate-of-change, 200ms latch) — throttle changes also trigger fade-out and target slewing.
+
+### Safety guards (all in `ArduPlane/quadplane.cpp`)
+- **Slew rate limit** (`VEL_HOLD_TARGET_SLEW_MS2 = 0.5 m/s²`): hold target can't teleport on brief stick touch → prevents backward lurch
+- **Error cap** (`VEL_DAMP_ERROR_CAP_MS = 1.5 m/s`): clamps error fed to gain → backstop against violent tilt snap
+- **Saturation guard** (`throttle >= 0.95`): freezes hold target when motors are maxed → prevents runaway target corruption
+- **Throttle deadband** (`THROTTLE_DELTA_THRESHOLD = 0.02`, `THROTTLE_ACTIVE_LATCH_S = 0.2s`): ignores RC jitter on throttle channel
+
+### Current values
+```
+Q_DAMP_VEL       = 0.20   (tuned — was 0.05 initial)
+Q_DAMP_LONG      = 0      (disabled)
+Q_DAMP_LONG_FILT = 5      (unused but left set)
+Q_DAMP_VERT      = 0.35   (validated)
+Q_TILT_EXPO      = 0.5    (raised from 0.3 — less sensitive near centre)
+```
+
+### Log signals (AVSD message)
+| Field | Description |
+|-------|-------------|
+| `VxBf` | Body-frame forward velocity — controlled signal |
+| `VxHld` | Hold target — should freeze on stick release |
+| `DmpH` | Total horizontal damp output |
+| `Fade` | Combined pitch+throttle activity fade (1=active, 0=suppressed) |
+| `TTgt` | Force-vector tilt target — diverges from PTilt when correction active |
+
+### Design doc
+Full invariant: `Avatar_Design.md § 9 [AV-INVAR:vel-damp]`
+
+---
+
 ## Outstanding Items
 
-1. **Dump golden params** — `python3 tools/mavlink/param_dump.py -v -o params/avatar_t1ranger_micoair.param`
-2. **Yaw hardware fix** — cant rear motors out 2–5° to recover yaw authority (software maxed)
-3. **Motor heat** — fundamental thrust-to-weight issue with 2-blade props; monitor in extended hover
-4. **Transition testing** — roll and yaw software tunes are locked, aircraft is ready
+1. **Weathervaning investigation** — see next section
+2. **Dump golden params** — `python3 tools/mavlink/param_dump.py -v -o params/avatar_t1ranger_micoair.param`
+3. **Yaw hardware fix** — cant rear motors out 2–5° to recover yaw authority (software maxed)
+4. **Motor heat** — fundamental thrust-to-weight issue with 2-blade props; monitor in extended hover
+5. **Pre-production cleanup** — disable `AVATAR_DEBUG_LOG` flag and remove TILT GCS debug message
+
+---
+
+## NEXT TASK: Weathervaning Investigation
+
+### Problem statement
+In STABILIZE (Avatar plane mode) and QSTABILIZE, there is no effective weathervaning — the aircraft does not align its nose to the wind. The pilot reported this; `Q_WVANE_GAIN=1.0` is set but appears inactive.
+
+### Why it's not working — code analysis
+
+**Built-in ArduPilot weathervaning** (`QuadPlane::get_weathervane_yaw_rate_cds`, `quadplane.cpp:4175`):
+- First guard: `!in_vtol_mode()` — returns `false` in STABILIZE (plane mode), so the function immediately returns 0
+- Explicitly also excluded from QSTABILIZE (`plane.control_mode == &plane.mode_qstabilize`, line 4184) and QHOVER
+- So `Q_WVANE_GAIN` is set but the function never executes in the modes we fly
+
+**Custom weathervaning** (`g_config.custom_weathervane`, `ArduCopter/mode_loiter.cpp`):
+- This is feature-flagged custom code in the **ArduCopter binary** only
+- Uses `attitude_control->input_thrust_vector_heading()` instead of `input_thrust_vector_rate_heading()` — targets a compass heading rather than a yaw rate
+- Does NOT exist in the ArduPlane binary that Avatar runs
+
+### Investigation steps for next agent
+1. **Confirm via logs**: Plot `ATT.Yaw` and `ATT.DesYaw` during a windy hover — if they both drift with wind (no heading correction), weathervaning is confirmed absent
+2. **Read the AC_WeatherVane library**: `libraries/AC_AttitudeControl/AC_WeatherVane.h/.cpp` — understand what inputs it needs and what it outputs
+3. **Decide architecture**: Should weathervaning in STABILIZE use:
+   - The existing `AC_WeatherVane` controller (add a call in the STABILIZE yaw path)?
+   - A simpler custom implementation (e.g., feed wind-direction error into the yaw PID)?
+4. **Compare built-in vs custom**: The custom `input_thrust_vector_heading()` approach (ArduCopter LOITER) is more tightly integrated with the attitude controller than the rate-addition approach. Understand the tradeoff before choosing.
+
+### Key files
+- `ArduPlane/quadplane.cpp:4175` — `get_weathervane_yaw_rate_cds()` (built-in, gated out)
+- `ArduCopter/mode_loiter.cpp:106` — custom weathervane flag usage
+- `ArduPlane/quadplane.cpp:1415` — `get_desired_yaw_rate_cds()` (where weathervane yaw is added in VTOL modes)
+- `libraries/AC_AttitudeControl/AC_WeatherVane.h` — the controller itself
 
 ---
 

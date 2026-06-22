@@ -629,6 +629,8 @@ private:
     float _damp_long_fade_factor = 1.0f;
     AP_Float damp_vel_gain;
     float _vel_hold_target = 0.0f;
+    float _last_throttle_norm = 0.0f;
+    float _throttle_active_s = 0.0f;
 #endif
 
     AP_Float takeoff_failure_scalar;
