@@ -2098,7 +2098,12 @@ void QuadPlane::update(void)
 
                 // [AV-INVAR:stabilize-yaw-pid] — see Avatar_Design.md § 9
                 if (plane.control_mode == &plane.mode_stabilize) {
-                    attitude_control->rate_bf_yaw_target(get_pilot_input_yaw_rate_cds());
+                    const float pilot_yaw_cds = get_pilot_input_yaw_rate_cds();
+                    // [AV-INVAR:passive-weathervane] — I-term reset lets aerodynamic weathervaning work
+                    if (g_config.custom_weathervane && is_zero(pilot_yaw_cds)) {
+                        attitude_control->get_rate_yaw_pid().reset_I();
+                    }
+                    attitude_control->rate_bf_yaw_target(pilot_yaw_cds);
                 }
 
                 attitude_control->set_throttle_out(get_pilot_throttle(), false, 0);

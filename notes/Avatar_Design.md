@@ -409,14 +409,21 @@ Change one line in `libraries/AP_CustomConfig/AP_CustomConfig.h`:
 
 This switches `g_config` to `avatarConfig`, selects `AvatarMixer` in `AP_Motors6DOF::init()`, and changes the preprocessor defines (`EMERGENCY_BLIMP_MANUAL_MODE = false`, etc.).
 
-### 5.2 Weathervaning (QLOITER / LOITER)
-The Avatar is designed to hover nose-into-wind during loiter. ArduPlane's stock `AC_WeatherVane` library handles this in QLOITER — no custom code required. It activates when the pilot releases the yaw stick and deactivates immediately on pilot yaw input.
+### 5.2 Weathervaning
 
-*   `WVANE_DIRECTION`: **1** (Nose into wind)
-*   `WVANE_GAIN`: **1.0** (Start here; increase for more aggressive response)
-*   `WVANE_ANG_MIN`: **1.0** (Deadzone in degrees; prevents hunting when nearly aligned)
+Avatar uses two distinct weathervaning mechanisms depending on mode.
 
-**Note (ArduCopter builds):** During copter-binary validation, weathervaning in LOITER requires `custom_weathervane = true` in `libraries/AP_CustomConfig/AP_CustomConfig.cpp`. The WVANE parameters alone are not sufficient in the copter build. See `ArduCopter/mode_loiter.cpp`.
+**QLOITER — active weathervaning via AC_WeatherVane:**
+ArduPlane's stock `AC_WeatherVane` library handles this — no custom code required. The position controller's roll lean demand (the aircraft tilts to hold position against wind drift) is used as the wind-direction signal. Activates 2 seconds after entering QLOITER with no rudder input; deactivates immediately on pilot yaw input.
+
+*   `Q_WVANE_ENABLE`: **1** (Nose into wind)
+*   `Q_WVANE_GAIN`: **1.0** (Start here; increase for more aggressive response)
+*   `Q_WVANE_ANG_MIN`: **1.0** (Deadzone in degrees; prevents hunting when nearly aligned)
+
+**STABILIZE and QSTABILIZE — passive weathervaning via I-term release:**
+In these modes there is no position controller, so the lean-based wind signal is unavailable. Instead, when the pilot has no rudder input, the yaw rate PID I-term is reset to zero each control loop. P and D continue running for yaw damping, but the I-term cannot accumulate to resist sustained aerodynamic yaw rotation. Avatar's fixed-wing fuselage has a natural weathercock stability moment; releasing the I-term allows this moment to slowly rotate the nose into the wind without active wind estimation or GPS. See `[AV-INVAR:passive-weathervane]`.
+
+This behaviour is gated by `g_config.custom_weathervane = true` (set in `avatarConfig`). It does not apply to QLOITER (which has active weathervaning) or CRUISE (which aerodynamically self-weathervanes via the vertical tail).
 
 ### 5.3 Avatar Config Values (`AP_CustomConfig.cpp`)
 
@@ -928,3 +935,21 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 **`state.current_tilt_deg` continuity:** Both copter mode (`[AV-INVAR:tilt-servo-tracking]`) and plane mode write `state.current_tilt_deg`. At a copter→FBWA mode switch, the slew starts from wherever copter mode left the tilt angle — no discontinuity.
 
 **Contrast with `[AV-INVAR:tilt-servo-tracking]`:** That invariant sends the full target to the servo immediately and uses `state.current_tilt_deg` only for motor mixing bookkeeping. This invariant does the opposite — `state.current_tilt_deg` is the authoritative servo command, and the servo only moves as fast as the slew allows.
+
+---
+
+### [AV-INVAR:passive-weathervane]
+
+**What:** In STABILIZE plane mode and QSTABILIZE, when the pilot has no rudder input (`get_pilot_input_yaw_rate_cds() == 0`), the yaw rate PID I-term is reset to zero each control loop before the rate controller runs. P and D continue to operate, providing yaw damping. When the pilot applies rudder input, the reset does not fire and the I-term accumulates normally, giving full PID authority for commanded yaw.
+
+**Where:** Two locations, both gated by `g_config.custom_weathervane`:
+1. `ArduPlane/quadplane.cpp` — Avatar FBWA block, STABILIZE branch: `attitude_control->get_rate_yaw_pid().reset_I()` before `rate_bf_yaw_target(pilot_yaw_cds)`.
+2. `ArduPlane/mode_qstabilize.cpp` — `ModeQStabilize::run()`: same reset before `hold_stabilize()`.
+
+**Why:** The yaw rate PID I-term accumulates to resist any sustained yaw motion, including rotation driven by the airframe's natural aerodynamic weathercock stability. Avatar's fixed-wing fuselage has a meaningful weathervaning moment — the vertical tail and fuselage shape create a restoring force that rotates the nose into the wind. Without this change, the I-term builds up to oppose this rotation indefinitely, and the aircraft points wherever it was placed rather than aligning with the wind. Resetting I each cycle while keeping P and D means: (a) brief yaw disturbances are damped by P, and (b) the sustained aerodynamic weathervaning moment, which is larger than what P alone can resist, can slowly rotate the nose into wind.
+
+**Why not QLOITER:** QLOITER has active weathervaning via `AC_WeatherVane` (see `[AV-INVAR:stabilize-yaw-pid]` and § 5.2). The I-term in QLOITER supports the active yaw rate commands from `AC_WeatherVane` and should not be zeroed.
+
+**Why not CRUISE:** CRUISE aerodynamically self-weathervanes through the fixed-wing control surfaces and natural fuselage stability at airspeed. No prop-based yaw intervention is needed or appropriate.
+
+**Do not apply to modes with active position or heading hold** — resetting I there would degrade tracking performance.

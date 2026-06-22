@@ -69,6 +69,10 @@ void ModeQStabilize::run()
 
     // normal QSTABILIZE mode
     float pilot_throttle_scaled = quadplane.get_pilot_throttle();
+    // [AV-INVAR:passive-weathervane] — I-term reset lets aerodynamic weathervaning work
+    if (g_config.custom_weathervane && is_zero(quadplane.get_pilot_input_yaw_rate_cds())) {
+        quadplane.attitude_control->get_rate_yaw_pid().reset_I();
+    }
     quadplane.hold_stabilize(pilot_throttle_scaled);
 
     // Stabilize with fixed wing surfaces
