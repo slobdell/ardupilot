@@ -1855,14 +1855,14 @@ void QuadPlane::update(void)
             const float throttle_out = motors->get_throttle();
             const bool motors_saturated = throttle_out >= 0.95f;
             if (any_stick_active && !motors_saturated) {
-                // Slew-rate limit the hold target so a brief stick touch never teleports
-                // VxHld to a speed far from the current target — see Avatar_Design.md § 9
-                // [AV-INVAR:vel-damp].
-                constexpr float VEL_HOLD_TARGET_SLEW_MS2 = 0.5f;
-                const float dt = AP::scheduler().get_loop_period_s();
-                const float max_step = VEL_HOLD_TARGET_SLEW_MS2 * dt;
-                _vel_hold_target += constrain_float(vel_bf.x - _vel_hold_target,
-                                                    -max_step, max_step);
+                // Track actual velocity instantly — the fade factor already suppresses
+                // dampening output to zero while the stick is active, so the error at
+                // stick release is always zero regardless of how fast the aircraft
+                // accelerated. A slew-rate limit here causes systematic lag: an aircraft
+                // that accelerates at 1.5 m/s² will always outrun a 0.5 m/s² target,
+                // producing large error and sustained braking on release.
+                // [AV-INVAR:vel-damp]
+                _vel_hold_target = vel_bf.x;
             }
             if (damp_vel_gain > 0.0f) {
                 // Error cap — see Avatar_Design.md § 9 [AV-INVAR:vel-damp].
