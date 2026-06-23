@@ -1855,22 +1855,22 @@ void QuadPlane::update(void)
             const float throttle_out = motors->get_throttle();
             const bool motors_saturated = throttle_out >= 0.95f;
             if (any_stick_active && !motors_saturated) {
-                // Track actual velocity instantly — the fade factor already suppresses
-                // dampening output to zero while the stick is active, so the error at
-                // stick release is always zero regardless of how fast the aircraft
-                // accelerated. A slew-rate limit here causes systematic lag: an aircraft
-                // that accelerates at 1.5 m/s² will always outrun a 0.5 m/s² target,
-                // producing large error and sustained braking on release.
+                // Track velocity instantly while any stick is active — both pitch and
+                // throttle update the hold target. When the stick releases, the error
+                // is exactly zero so the dampener engages smoothly from rest.
                 // [AV-INVAR:vel-damp]
                 _vel_hold_target = vel_bf.x;
             }
             if (damp_vel_gain > 0.0f) {
-                // Error cap — see Avatar_Design.md § 9 [AV-INVAR:vel-damp].
+                // No fade factor: target tracking guarantees zero error during stick
+                // activity, so the output is naturally zero without explicit suppression.
+                // The fade is applied to Q_DAMP_LONG but not here — vel-damp is always
+                // active. Error cap is the only guard. [AV-INVAR:vel-damp]
                 constexpr float VEL_DAMP_ERROR_CAP_MS = 1.5f;
                 const float vel_error = constrain_float(vel_bf.x - _vel_hold_target,
                                                         -VEL_DAMP_ERROR_CAP_MS,
                                                          VEL_DAMP_ERROR_CAP_MS);
-                avatar_vel_damp_thrust = -vel_error * damp_vel_gain * _damp_long_fade_factor;
+                avatar_vel_damp_thrust = -vel_error * damp_vel_gain;
             }
         }
     }

@@ -1630,6 +1630,144 @@ void stabilize_pilot_stick_retains_authority_during_dampening()
 }
 
 // ============================================================================
+// GROUP L — Vel-damp mixer integration [AV-INVAR:vel-damp]
+//
+// These tests verify that the force-vector decomposition in the mixer correctly
+// incorporates damp_horiz_thrust and damp_vert_thrust, and that the two axes
+// compose independently. They also validate the key architectural invariant of
+// the new always-active vel-damp: when damp_horiz = 0 (zero velocity error),
+// the tilt is exactly the pilot's commanded angle — no correction is applied.
+//
+// All tests use unlimited tilt_rate_up_dps (1e6) so one call reaches steady
+// state. Throttle = 50% throughout. Expected tilt angles are computed from:
+//
+//   thrust_horiz = throttle × sin(pilot_tilt) + damp_horiz
+//   thrust_vert  = throttle × cos(pilot_tilt) + damp_vert
+//   tilt_target  = atan2(thrust_horiz, thrust_vert)  [degrees]
+//   tilt_angle   = tilt_target / FWD_DEG
+// ============================================================================
+
+void vel_damp_zero_horiz_tilt_equals_pilot_command()
+{
+    // damp_horiz = 0, damp_vert = 0 → decomposition block not entered (guard:
+    // fabsf(damp_horiz) > 1e-4 is false). tilt_target = pilot_tilt_deg = 30°.
+    // This validates: zero velocity error → zero correction → no servo movement.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in    = neutral_stabilize_inputs();
+    in.tilt_rate_up_dps       = 1e6f;
+    in.plane.damp_horiz_thrust = 0.0f;
+    in.plane.damp_vert_thrust  = 0.0f;
+    MixerState   state = state_at_tilt(30.0f);
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(30.0f / FWD_DEG, out.tilt_angle, 0.001f);
+    end_test();
+}
+
+void vel_damp_positive_horiz_tilts_forward_from_vertical()
+{
+    // Pilot vertical (0°), damp_horiz = 0.15 (fighting headwind → tilt forward).
+    //   thrust_horiz = 0.5×sin(0°) + 0.15 = 0.15
+    //   thrust_vert  = 0.5×cos(0°)        = 0.50
+    //   tilt_target  = atan2(0.15, 0.50)  = 16.70°  →  tilt_angle = 16.70/95
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in    = neutral_stabilize_inputs();
+    in.tilt_rate_up_dps        = 1e6f;
+    in.plane.damp_horiz_thrust = 0.15f;
+    in.plane.damp_vert_thrust  = 0.0f;
+    MixerState   state = state_at_tilt(0.0f);
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    float expected_deg  = degrees(std::atan2(0.15f, 0.50f)); // ≈ 16.70°
+    float expected_tilt = expected_deg / FWD_DEG;
+    CHECK_NEAR(expected_tilt, out.tilt_angle, 0.002f);
+    CHECK_TRUE(out.tilt_angle > 0.0f); // moved forward from vertical
+    end_test();
+}
+
+void vel_damp_negative_horiz_tilts_more_vertical()
+{
+    // Pilot at 30°, damp_horiz = -0.10 (braking — tilt toward vertical).
+    //   thrust_horiz = 0.5×sin(30°) − 0.10 = 0.25 − 0.10 = 0.15
+    //   thrust_vert  = 0.5×cos(30°)        = 0.4330
+    //   tilt_target  = atan2(0.15, 0.4330) = 19.11°  <  30° (less forward)
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in    = neutral_stabilize_inputs();
+    in.tilt_rate_up_dps        = 1e6f;
+    in.plane.damp_horiz_thrust = -0.10f;
+    in.plane.damp_vert_thrust  = 0.0f;
+    MixerState   state = state_at_tilt(30.0f);
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    float expected_deg  = degrees(std::atan2(0.15f, 0.4330f)); // ≈ 19.11°
+    float expected_tilt = expected_deg / FWD_DEG;
+    CHECK_NEAR(expected_tilt, out.tilt_angle, 0.002f);
+    CHECK_TRUE(out.tilt_angle < 30.0f / FWD_DEG); // less forward than pilot commanded
+    end_test();
+}
+
+void vel_damp_vert_alone_tilts_toward_vertical_and_increases_throttle()
+{
+    // Pilot at 30°, damp_horiz = 0, damp_vert = 0.30 (sink rate correction).
+    //   thrust_horiz = 0.5×sin(30°) + 0    = 0.25
+    //   thrust_vert  = 0.5×cos(30°) + 0.30 = 0.7330
+    //   tilt_target  = atan2(0.25, 0.7330) = 18.85°  <  30° (more vertical)
+    //   new_throttle = sqrt(0.25² + 0.7330²) = 0.7745
+    //
+    // Vertical dampening rotates the thrust vector toward vertical AND increases
+    // total thrust. Wing motors reflect the higher throttle magnitude.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in    = neutral_stabilize_inputs();
+    in.tilt_rate_up_dps        = 1e6f;
+    in.plane.damp_horiz_thrust = 0.0f;
+    in.plane.damp_vert_thrust  = 0.30f;
+    MixerState   state = state_at_tilt(30.0f);
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    float expected_deg  = degrees(std::atan2(0.25f, 0.7330f)); // ≈ 18.85°
+    float expected_tilt = expected_deg / FWD_DEG;
+    CHECK_NEAR(expected_tilt, out.tilt_angle, 0.002f);
+    CHECK_TRUE(out.tilt_angle < 30.0f / FWD_DEG); // more vertical than pilot
+    // Wing motors should reflect the increased throttle magnitude (~0.7745)
+    CHECK_TRUE(out.motor_thrust[0] > 0.6f); // above pilot's 0.5 baseline
+    end_test();
+}
+
+void vel_damp_horiz_and_vert_compose_via_force_vector()
+{
+    // Both dampeners active simultaneously — composed through force-vector atan2,
+    // not applied sequentially. Pilot at 30°, damp_horiz = 0.10, damp_vert = 0.20.
+    //   thrust_horiz = 0.5×sin(30°) + 0.10 = 0.25 + 0.10 = 0.35
+    //   thrust_vert  = 0.5×cos(30°) + 0.20 = 0.4330 + 0.20 = 0.6330
+    //   tilt_target  = atan2(0.35, 0.6330) = 28.94°
+    //   new_throttle = sqrt(0.35² + 0.6330²) = 0.7232
+    //
+    // The result is neither 30° (pilot) + forward push + back-tilt in sequence;
+    // it is the single vector sum. If the two were applied sequentially the
+    // answer would differ.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in    = neutral_stabilize_inputs();
+    in.tilt_rate_up_dps        = 1e6f;
+    in.plane.damp_horiz_thrust = 0.10f;
+    in.plane.damp_vert_thrust  = 0.20f;
+    MixerState   state = state_at_tilt(30.0f);
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    float expected_deg  = degrees(std::atan2(0.35f, 0.6330f)); // ≈ 28.94°
+    float expected_tilt = expected_deg / FWD_DEG;
+    CHECK_NEAR(expected_tilt, out.tilt_angle, 0.002f);
+    // Tilt is slightly less than pilot's 30° because vert damp pulls more vertical
+    // than horiz damp pushes forward in this scenario.
+    CHECK_TRUE(out.tilt_angle < 30.0f / FWD_DEG);
+    end_test();
+}
+
+// ============================================================================
 // LAYER 4: BlimpMixer — PLANE MODE
 //
 // Active config: forward_flight_physical_angle_deg = 90°, handoff_point = 0.5
@@ -1875,6 +2013,13 @@ int main()
     stabilize_vert_damp_current_recovers_to_pilot_when_damp_clears();
     stabilize_long_damp_positive_tilts_servo_more_forward_over_time();
     stabilize_pilot_stick_retains_authority_during_dampening();
+
+    std::printf("\n-- Group L: Vel-damp mixer integration [AV-INVAR:vel-damp] --\n");
+    vel_damp_zero_horiz_tilt_equals_pilot_command();
+    vel_damp_positive_horiz_tilts_forward_from_vertical();
+    vel_damp_negative_horiz_tilts_more_vertical();
+    vel_damp_vert_alone_tilts_toward_vertical_and_increases_throttle();
+    vel_damp_horiz_and_vert_compose_via_force_vector();
 
     std::printf("\n-- Layer 4: BlimpMixer plane mode --\n");
     blimp_plane_neutral_stick_gives_full_forward_tilt();

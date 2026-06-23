@@ -172,3 +172,4 @@ env.bak/
 venv.bak/
 autotest_result_*_junit.xml
 tests/custom_main_test/tvc_test
+tests/mixer_test/mixer_test
