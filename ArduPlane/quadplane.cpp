@@ -1849,11 +1849,48 @@ void QuadPlane::update(void)
             const Vector3f vel_bf = rot_body_to_ned.mul_transpose(vel_ned);
             av_vel_bf_x = vel_bf.x;
             const float pitch_stick = plane.channel_pitch->norm_input_dz();
-            const bool any_stick_active = fabsf(pitch_stick) > 0.05f || _throttle_active_s > 0.0f;
+            const bool pitch_active_vd = fabsf(pitch_stick) > 0.05f;
+            const bool throttle_active = _throttle_active_s > 0.0f;
+            const bool any_stick_active = pitch_active_vd || throttle_active;
             // Saturation guard: freeze hold target when motors are maxed — see Avatar_Design.md § 9
             // [AV-INVAR:vel-damp].
             const float throttle_out = motors->get_throttle();
             const bool motors_saturated = throttle_out >= 0.95f;
+
+            // [AV-INVAR:vel-damp] — Angle latch: smoothly transfer the dampener's corrective
+            // tilt into pilot_tilt_deg while the dampener disengages, so the servo stays at
+            // its corrected position and the decomposition-basis change is gradual rather than
+            // a single-frame step.
+            //
+            // Without this, when the dampener zeroes (sticks active → vel error = 0), tilt_target
+            // snaps back to the uncorrected pilot_tilt_deg, the servo retracts, and the throttle
+            // boost disappears while the servo is still physically tilted — causing a sag.
+            //
+            // With the slew: pilot_tilt_deg moves from its pre-latch value toward current_tilt_deg
+            // at Q_TILT_RATE_UP deg/s each frame. The servo barely moves because the atan2
+            // decomposition sees (pilot_tilt increasing, damp_horiz fading) as approximately
+            // constant. thrust_vert transitions smoothly rather than stepping.
+            //
+            // Rate is Q_TILT_RATE_UP not because pilot_tilt_deg is physically constrained by
+            // servo speed — it is a pure software variable — but because it provides a timescale
+            // that is perceptually coherent with servo motion. It also naturally matches the
+            // _damp_long_fade_factor 100 ms decay window for typical small corrections.
+            if (throttle_active && !pitch_active_vd) {
+                const float dt = AP::scheduler().get_loop_period_s();
+                if (!_last_throttle_active) {
+                    _latch_tilt_start  = ((AP_Motors6DOF*)motors)->get_pilot_tilt_deg();
+                    _latch_tilt_target = ((AP_Motors6DOF*)motors)->get_tilt_deg();
+                }
+                const float rate_dps = (float)tiltrotor.max_rate_up_dps;
+                const float pilot_tilt = ((AP_Motors6DOF*)motors)->get_pilot_tilt_deg();
+                const float step = rate_dps * dt;
+                const float new_tilt = (_latch_tilt_target > pilot_tilt)
+                    ? MIN(pilot_tilt + step, _latch_tilt_target)
+                    : MAX(pilot_tilt - step, _latch_tilt_target);
+                ((AP_Motors6DOF*)motors)->set_pilot_tilt_deg(new_tilt);
+            }
+            _last_throttle_active = throttle_active;
+
             if (any_stick_active && !motors_saturated) {
                 // Track velocity instantly while any stick is active — both pitch and
                 // throttle update the hold target. When the stick releases, the error

@@ -65,6 +65,8 @@ public:
     float get_tilt_deg() const { return _mixer_state.current_tilt_deg; }
     // Pilot-intended tilt angle — only moves from stick input, never from dampening
     float get_pilot_tilt_deg() const { return _mixer_state.pilot_tilt_deg; }
+    // Latch the pilot tilt reference to the current corrected tilt angle — see [AV-INVAR:vel-damp]
+    void set_pilot_tilt_deg(float deg) { _mixer_state.pilot_tilt_deg = deg; }
 
     // output_min - sends minimum values out to the motors
     void output_min() override;
