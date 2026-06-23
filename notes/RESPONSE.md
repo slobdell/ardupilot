@@ -1,25 +1,31 @@
 # Response to Bug Report: Speed-Hold Tilt Jump & Throttle Step-Change Transients
 
-## What was implemented
+## What was implemented (revised after review)
 
-The angle latch — Concept #3 from the report — was implemented as a slew rather than a
-single-frame snap, and without the additional machinery (freeze-target tracking, fade factor on
-vel-damp, `_last_stick_active` state). The changes are:
+The full proposal from the report was implemented. An earlier revision used a slew rather than
+an instant snap and was found to be incorrect (see "Correction" section below). Final changes:
 
 **`libraries/AP_Motors/AP_Motors6DOF.h`** — added `set_pilot_tilt_deg(float deg)` setter.
 
-**`ArduPlane/quadplane.h`** — added `bool _last_throttle_active`, `float _latch_tilt_start`,
-`float _latch_tilt_target`.
+**`ArduPlane/quadplane.h`** — added `bool _last_throttle_active`, `bool _last_stick_active`.
 
-**`ArduPlane/quadplane.cpp`** — in the vel-damp block, immediately before the existing
-`any_stick_active` target-tracking guard: on the first frame of throttle activity with neutral
-pitch, snapshot `_latch_tilt_start` (current `pilot_tilt_deg`) and `_latch_tilt_target`
-(current `current_tilt_deg`). Every subsequent throttle-active frame, advance `pilot_tilt_deg`
-toward `_latch_tilt_target` at `Q_TILT_RATE_UP × dt` degrees per frame via `set_pilot_tilt_deg`.
-All other vel-damp logic (continuous target tracking, no fade factor, error cap) is unchanged.
+**`ArduPlane/quadplane.cpp`** — three coordinated changes in the vel-damp block:
+1. **Instant snap latch**: on the first frame of throttle-only activity, `pilot_tilt_deg` is
+   snapped (not slewed) to `current_tilt_deg`.
+2. **Target freeze + release snapshot**: hold target is frozen during stick activity; snapshotted
+   at the exact frame of release (with saturation guard).
+3. **Fade factor on vel-damp**: `avatar_vel_damp_thrust *= _damp_long_fade_factor`.
+   An else-branch on the outer condition resets both flags when not in STABILIZE/flying.
 
-The slew runs only while `throttle_active && !pitch_active` and stops (leaving `pilot_tilt_deg`
-wherever it reached) when the pilot releases or applies pitch.
+## Correction: why the slew failed
+
+The first implementation slewed `pilot_tilt_deg` from 0° toward 15° at `Q_TILT_RATE_UP` per
+frame instead of snapping. The mixer sets `tilt_target_deg = pilot_tilt_deg` when
+`damp_horiz = 0` (the force block is bypassed when `fabsf(damp_horiz) < 1e-4`). With
+continuous target tracking, `damp_horiz` drops to 0 on frame 1. So `tilt_target_deg` equals
+the slowly-slewing `pilot_tilt_deg` (≈ 0.1° on frame 1), and `current_tilt_deg` chases it
+downward at the same rate — converging at the midpoint (7.5° for a 15° correction) before
+recovering. The retraction lurch was not prevented, only halved in magnitude.
 
 ---
 
@@ -59,41 +65,24 @@ stepping, and the lag-induced sag never occurs because the servo never retracts.
 
 ---
 
-## Disagreement with the proposed implementation
+## Revised position: agreement with the full proposal
 
-Three elements of the proposed solution were rejected:
+After the other agent's review identified the failure of the slew approach, the three previously
+rejected elements were reconsidered and found to be correct:
 
-### 1. Freezing `_vel_hold_target` during stick activity (only-at-release snapshot)
+**Freeze + fade are co-dependent, not independent.** The freeze is necessary to give the fade
+something to act on: with continuous tracking, `vel_error = 0` always during stick activity, so
+multiplying by the fade factor produces zero regardless. The freeze lets the error grow (as the
+aircraft begins to drift) so the decaying fade can smoothly wash out the correction over 100 ms.
 
-The current continuous tracking (`_vel_hold_target = vel_bf.x` every frame while stick is
-active) is load-bearing. It ensures the dampener never fights intentional speed changes: when the
-pilot adjusts throttle and the aircraft accelerates, the hold target tracks that new speed so the
-error stays at zero throughout. The proposed change freezes the target when the stick goes active,
-meaning the dampener generates a growing error (up to the 1.5 m/s cap) during the entire
-stick-active period, suppressed only by the fade factor. This is the wrong direction — the
-dampener is fighting the pilot's commanded speed change during the 100 ms fade window.
+**Re-engagement is gradual, not suppressed.** The 500 ms fade recovery after stick release means
+the dampener re-engages gradually rather than instantly. The release snapshot ensures `vel_error`
+starts at 0, so the dampener builds from zero — no grab lurch. This is better behaviour than the
+previous instant re-engagement.
 
-With the angle latch in place, continuous tracking still achieves zero output during stick
-activity (error = 0 → correction = 0), and the latch handles the tilt retraction independently.
-The two mechanisms are orthogonal; there is no need to change the tracking semantics.
-
-### 2. Applying `_damp_long_fade_factor` to vel-damp output
-
-The report adds `* _damp_long_fade_factor` to `avatar_vel_damp_thrust`. With the angle latch and
-continuous tracking, the vel-damp output is already zero during stick activity (because the error
-is zero). The fade factor adds no benefit and introduces an asymmetry: vel-damp re-engages
-instantly on stick release (error jumps from 0 to the held-speed error), while the fade is still
-recovering over 500 ms — meaning the fade would SUPPRESS re-engagement for up to 500 ms after
-the pilot releases. That is the opposite of what we want.
-
-### 3. Complexity cost vs. benefit
-
-The full proposal adds two new state variables (`_last_throttle_active`, `_last_stick_active`),
-changes the target-tracking semantics, adds a fade path to vel-damp, and changes the release
-snapshot to a single-frame edge trigger. The implemented slew latch adds three new state
-variables (`_last_throttle_active`, `_latch_tilt_start`, `_latch_tilt_target`) and a small
-per-frame slew block, leaving all other invariants intact. The vel-damp target-tracking semantics
-and the error-cap guard are untouched.
+**The "dampener fights pilot" concern was overstated.** During the 100 ms fade window the error
+grows only if the aircraft drifts (wind pushing it). The corrective force is diminishing and
+capped at ±1.5 m/s error. The duration is 100 ms maximum. This is an acceptable trade-off.
 
 ---
 

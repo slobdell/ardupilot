@@ -632,8 +632,7 @@ private:
     float _last_throttle_norm = 0.0f;
     float _throttle_active_s = 0.0f;
     bool _last_throttle_active = false;
-    float _latch_tilt_start = 0.0f;
-    float _latch_tilt_target = 0.0f;
+    bool _last_stick_active = false;
 #endif
 
     AP_Float takeoff_failure_scalar;

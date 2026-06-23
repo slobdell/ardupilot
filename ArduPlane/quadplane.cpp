@@ -1851,65 +1851,51 @@ void QuadPlane::update(void)
             const float pitch_stick = plane.channel_pitch->norm_input_dz();
             const bool pitch_active_vd = fabsf(pitch_stick) > 0.05f;
             const bool throttle_active = _throttle_active_s > 0.0f;
-            const bool any_stick_active = pitch_active_vd || throttle_active;
-            // Saturation guard: freeze hold target when motors are maxed — see Avatar_Design.md § 9
-            // [AV-INVAR:vel-damp].
+            const bool stick_active = pitch_active_vd || throttle_active;
             const float throttle_out = motors->get_throttle();
             const bool motors_saturated = throttle_out >= 0.95f;
 
-            // [AV-INVAR:vel-damp] — Angle latch: smoothly transfer the dampener's corrective
-            // tilt into pilot_tilt_deg while the dampener disengages, so the servo stays at
-            // its corrected position and the decomposition-basis change is gradual rather than
-            // a single-frame step.
-            //
-            // Without this, when the dampener zeroes (sticks active → vel error = 0), tilt_target
-            // snaps back to the uncorrected pilot_tilt_deg, the servo retracts, and the throttle
-            // boost disappears while the servo is still physically tilted — causing a sag.
-            //
-            // With the slew: pilot_tilt_deg moves from its pre-latch value toward current_tilt_deg
-            // at Q_TILT_RATE_UP deg/s each frame. The servo barely moves because the atan2
-            // decomposition sees (pilot_tilt increasing, damp_horiz fading) as approximately
-            // constant. thrust_vert transitions smoothly rather than stepping.
-            //
-            // Rate is Q_TILT_RATE_UP not because pilot_tilt_deg is physically constrained by
-            // servo speed — it is a pure software variable — but because it provides a timescale
-            // that is perceptually coherent with servo motion. It also naturally matches the
-            // _damp_long_fade_factor 100 ms decay window for typical small corrections.
-            if (throttle_active && !pitch_active_vd) {
-                const float dt = AP::scheduler().get_loop_period_s();
-                if (!_last_throttle_active) {
-                    _latch_tilt_start  = ((AP_Motors6DOF*)motors)->get_pilot_tilt_deg();
-                    _latch_tilt_target = ((AP_Motors6DOF*)motors)->get_tilt_deg();
-                }
-                const float rate_dps = (float)tiltrotor.max_rate_up_dps;
-                const float pilot_tilt = ((AP_Motors6DOF*)motors)->get_pilot_tilt_deg();
-                const float step = rate_dps * dt;
-                const float new_tilt = (_latch_tilt_target > pilot_tilt)
-                    ? MIN(pilot_tilt + step, _latch_tilt_target)
-                    : MAX(pilot_tilt - step, _latch_tilt_target);
-                ((AP_Motors6DOF*)motors)->set_pilot_tilt_deg(new_tilt);
+            // [AV-INVAR:vel-damp] — Angle latch: snap pilot_tilt_deg to current_tilt_deg
+            // on the first frame of throttle-only activity. The mixer sets tilt_target_deg
+            // to pilot_tilt_deg when damp_horiz = 0 (force block bypassed). Without the latch,
+            // pilot_tilt_deg is still 0° so tilt_target = 0° and the servo retracts at full
+            // physical speed the moment the dampener zeroes. With the snap, pilot_tilt_deg = 15°
+            // so tilt_target = 15° and the servo holds position. The freeze+fade below then
+            // keeps damp_horiz non-zero and decaying, smoothing the decomposition-basis transition.
+            if (throttle_active && !pitch_active_vd && !_last_throttle_active) {
+                const float corrected_tilt = ((AP_Motors6DOF*)motors)->get_tilt_deg();
+                ((AP_Motors6DOF*)motors)->set_pilot_tilt_deg(corrected_tilt);
             }
             _last_throttle_active = throttle_active;
 
-            if (any_stick_active && !motors_saturated) {
-                // Track velocity instantly while any stick is active — both pitch and
-                // throttle update the hold target. When the stick releases, the error
-                // is exactly zero so the dampener engages smoothly from rest.
-                // [AV-INVAR:vel-damp]
+            // [AV-INVAR:vel-damp] — Target freeze + release snapshot.
+            // Hold target is frozen during stick activity so vel_error stays non-zero —
+            // this gives the fade factor something to act on, producing a smooth force
+            // washout rather than an instant drop. On the exact frame sticks are released,
+            // snapshot the current speed so re-engagement starts from zero error.
+            // Saturation guard on snapshot: if motors are maxed at release, keep the frozen
+            // target so correction resumes as soon as headroom returns. [AV-INVAR:vel-damp]
+            if (!stick_active && _last_stick_active && !motors_saturated) {
                 _vel_hold_target = vel_bf.x;
             }
+            _last_stick_active = stick_active;
+
             if (damp_vel_gain > 0.0f) {
-                // No fade factor: target tracking guarantees zero error during stick
-                // activity, so the output is naturally zero without explicit suppression.
-                // The fade is applied to Q_DAMP_LONG but not here — vel-damp is always
-                // active. Error cap is the only guard. [AV-INVAR:vel-damp]
+                // Fade factor (_damp_long_fade_factor) decays to 0 over 100 ms when sticks
+                // are active and recovers over 500 ms at neutral — shared with Q_DAMP_LONG.
+                // The frozen target provides a non-zero vel_error for the fade to smoothly
+                // wash out. Without the freeze, error = 0 and the fade would have nothing
+                // to act on. Error cap backstops against EKF spikes. [AV-INVAR:vel-damp]
                 constexpr float VEL_DAMP_ERROR_CAP_MS = 1.5f;
                 const float vel_error = constrain_float(vel_bf.x - _vel_hold_target,
                                                         -VEL_DAMP_ERROR_CAP_MS,
                                                          VEL_DAMP_ERROR_CAP_MS);
-                avatar_vel_damp_thrust = -vel_error * damp_vel_gain;
+                avatar_vel_damp_thrust = -vel_error * damp_vel_gain * _damp_long_fade_factor;
             }
         }
+    } else {
+        _last_throttle_active = false;
+        _last_stick_active = false;
     }
 #endif
 
