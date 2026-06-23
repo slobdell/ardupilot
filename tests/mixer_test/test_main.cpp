@@ -1768,6 +1768,171 @@ void vel_damp_horiz_and_vert_compose_via_force_vector()
 }
 
 // ============================================================================
+// GROUP M — Angle latch and force-block bypass [AV-INVAR:vel-damp]
+//
+// These tests document the critical invariant that drove the angle-latch design
+// and capture the failure mode of the slew approach that was tried first.
+//
+// The force-vector decomposition block in tilt_rate_mode is gated by:
+//   if (fabsf(damp_horiz_thrust) > 1e-4f || damp_vert_thrust > 0.0f)
+//
+// When the gate is false (damp_horiz = 0), tilt_target_deg falls through to
+// its default: state.pilot_tilt_deg (line: "float tilt_target_deg = state.pilot_tilt_deg").
+// The servo then slews toward pilot_tilt_deg at the physical rate.
+//
+// FAILURE MODE (slew approach):
+//   pilot_tilt_deg = 0° (not yet snapped), damp_horiz drops to 0 when the
+//   vel-damp error is zeroed. tilt_target = 0°. Physical servo chases 0° at
+//   full speed while pilot_tilt_deg slews up slowly from 0°. They converge at
+//   the midpoint — for a 15° correction that is ~7.5°. The retraction lurch
+//   is halved but not prevented.
+//
+// CORRECT APPROACH (snap latch):
+//   pilot_tilt_deg is snapped to current_tilt_deg (e.g. 15°) before damp_horiz
+//   drops to zero. With pilot_tilt_deg = 15° and damp_horiz = 0: force block
+//   is bypassed, tilt_target = 15°, servo moves 0° per frame. No retraction.
+//   As damp_horiz fades (non-zero during the 100 ms fade window while aircraft
+//   drifts), the force block remains active and provides smooth correction until
+//   the fade reaches zero and tilt settles exactly at pilot_tilt_deg = 15°.
+// ============================================================================
+
+void angle_latch_force_block_bypassed_when_damp_horiz_zero()
+{
+    // When damp_horiz = 0 (and damp_vert = 0) the force-vector block is NOT
+    // entered. tilt_target_deg = pilot_tilt_deg exactly — confirming the gate
+    // that makes the snap vs. slew distinction critical.
+    //
+    // pilot_tilt = 30°, damp_horiz = 0 → tilt_target = 30° → servo holds.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in    = neutral_stabilize_inputs();
+    in.tilt_rate_up_dps        = 1e6f;
+    in.plane.damp_horiz_thrust = 0.0f;
+    in.plane.damp_vert_thrust  = 0.0f;
+    MixerState   state = state_at_tilt(30.0f);
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(30.0f / FWD_DEG, out.tilt_angle, 0.0001f);
+    CHECK_NEAR(30.0f, state.current_tilt_deg,   0.0001f); // zero movement
+    end_test();
+}
+
+void angle_latch_snap_prevents_retraction_when_damp_horiz_drops_to_zero()
+{
+    // Post-latch state: pilot_tilt_deg has been snapped to 15°, current at 15°,
+    // damp_horiz = 0. Force block bypassed → tilt_target = pilot_tilt = 15° →
+    // servo moves 0°/frame. Verify over 10 frames with finite rate.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in    = neutral_stabilize_inputs();
+    in.tilt_rate_up_dps        = 60.0f; // finite rate exposes any movement
+    in.plane.damp_horiz_thrust = 0.0f;
+    in.plane.damp_vert_thrust  = 0.0f;
+    MixerState   state;
+    state.pilot_tilt_deg   = 15.0f; // snapped by angle latch
+    state.current_tilt_deg = 15.0f;
+    MixerOutputs out;
+    for (int i = 0; i < 10; i++) mixer.mix(in, state, out);
+    CHECK_NEAR(15.0f / FWD_DEG, out.tilt_angle, 0.001f);
+    CHECK_NEAR(15.0f, state.current_tilt_deg,   0.001f);
+    end_test();
+}
+
+void angle_latch_without_snap_servo_retracts_when_damp_horiz_drops_to_zero()
+{
+    // Failure mode of the slew approach: pilot_tilt_deg = 0° (not snapped),
+    // damp_horiz = 0, current_tilt_deg = 15°. Force block bypassed →
+    // tilt_target = 0° → servo retracts at 60°/s toward 0°.
+    //
+    // After 10 frames at 60°/s × 0.0025 s = 0.15°/frame:
+    //   current = 15° − 10×0.15° = 13.5° — a clear 1.5° retraction.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in    = neutral_stabilize_inputs();
+    in.tilt_rate_up_dps        = 60.0f;
+    in.plane.damp_horiz_thrust = 0.0f;
+    in.plane.damp_vert_thrust  = 0.0f;
+    MixerState   state;
+    state.pilot_tilt_deg   = 0.0f;  // NOT snapped — slew approach failure mode
+    state.current_tilt_deg = 15.0f;
+    MixerOutputs out;
+    for (int i = 0; i < 10; i++) mixer.mix(in, state, out);
+    float expected = 15.0f - 10.0f * 60.0f * 0.0025f; // = 13.5°
+    CHECK_NEAR(expected, state.current_tilt_deg, 0.01f); // retracted
+    CHECK_TRUE(state.current_tilt_deg < 15.0f);          // moving toward 0°
+    end_test();
+}
+
+void angle_latch_non_zero_damp_horiz_activates_force_block_past_pilot_tilt()
+{
+    // With pilot_tilt = 15° and damp_horiz = 0.10 (still present during fade),
+    // the force block IS entered (fabsf(0.10) > 1e-4). tilt_target is computed
+    // via atan2, landing MORE forward than pilot_tilt — the residual correction
+    // force is still active during the fade window.
+    //
+    //   thrust_horiz = 0.5×sin(15°) + 0.10 = 0.2294
+    //   thrust_vert  = 0.5×cos(15°)        = 0.4830
+    //   tilt_target  = atan2(0.2294, 0.4830) ≈ 25.4°  > 15°
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in    = neutral_stabilize_inputs();
+    in.tilt_rate_up_dps        = 1e6f;
+    in.plane.damp_horiz_thrust = 0.10f;
+    in.plane.damp_vert_thrust  = 0.0f;
+    MixerState   state;
+    state.pilot_tilt_deg   = 15.0f;
+    state.current_tilt_deg = 15.0f;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    float h = 0.5f * std::sin(radians(15.0f)) + 0.10f;
+    float v = 0.5f * std::cos(radians(15.0f));
+    float expected = degrees(std::atan2(h, v)) / FWD_DEG;
+    CHECK_NEAR(expected, out.tilt_angle, 0.002f);
+    CHECK_TRUE(out.tilt_angle > 15.0f / FWD_DEG); // past pilot angle — force block active
+    end_test();
+}
+
+void angle_latch_fade_diminishing_damp_horiz_converges_to_pilot_tilt()
+{
+    // Simulate the 100 ms fade washout with snapped pilot_tilt = 15°.
+    // Steps: damp_horiz = 0.15 → 0.10 → 0.05 → 0.
+    // At each non-zero step the force block is active and tilt > 15°.
+    // At zero the block is bypassed and tilt = pilot_tilt exactly.
+    // Servo never goes BELOW 15° at any step — no retraction at any point.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in    = neutral_stabilize_inputs();
+    in.tilt_rate_up_dps = 1e6f;
+    MixerState   state;
+    state.pilot_tilt_deg   = 15.0f;
+    state.current_tilt_deg = 15.0f;
+    MixerOutputs out;
+
+    // Step 1: D = 0.15 → force block active → tilt pushed forward past 15°
+    in.plane.damp_horiz_thrust = 0.15f;
+    mixer.mix(in, state, out);
+    float tilt_d15 = out.tilt_angle;
+    CHECK_TRUE(tilt_d15 > 15.0f / FWD_DEG);
+
+    // Step 2: D = 0.10 → still forward but less so than step 1
+    in.plane.damp_horiz_thrust = 0.10f;
+    mixer.mix(in, state, out);
+    float tilt_d10 = out.tilt_angle;
+    CHECK_TRUE(tilt_d10 > 15.0f / FWD_DEG);  // still forward of pilot
+    CHECK_TRUE(tilt_d10 < tilt_d15);          // converging toward 15°
+
+    // Step 3: D = 0 → force block bypassed → tilt settles at pilot_tilt exactly
+    in.plane.damp_horiz_thrust = 0.0f;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(15.0f / FWD_DEG, out.tilt_angle, 0.001f);
+
+    // Confirm: tilt was never below pilot_tilt (15°) at any step — no retraction
+    CHECK_TRUE(tilt_d15 >= 15.0f / FWD_DEG);
+    CHECK_TRUE(tilt_d10 >= 15.0f / FWD_DEG);
+    end_test();
+}
+
+// ============================================================================
 // LAYER 4: BlimpMixer — PLANE MODE
 //
 // Active config: forward_flight_physical_angle_deg = 90°, handoff_point = 0.5
@@ -2020,6 +2185,13 @@ int main()
     vel_damp_negative_horiz_tilts_more_vertical();
     vel_damp_vert_alone_tilts_toward_vertical_and_increases_throttle();
     vel_damp_horiz_and_vert_compose_via_force_vector();
+
+    std::printf("\n-- Group M: Angle latch and force-block bypass [AV-INVAR:vel-damp] --\n");
+    angle_latch_force_block_bypassed_when_damp_horiz_zero();
+    angle_latch_snap_prevents_retraction_when_damp_horiz_drops_to_zero();
+    angle_latch_without_snap_servo_retracts_when_damp_horiz_drops_to_zero();
+    angle_latch_non_zero_damp_horiz_activates_force_block_past_pilot_tilt();
+    angle_latch_fade_diminishing_damp_horiz_converges_to_pilot_tilt();
 
     std::printf("\n-- Layer 4: BlimpMixer plane mode --\n");
     blimp_plane_neutral_stick_gives_full_forward_tilt();
