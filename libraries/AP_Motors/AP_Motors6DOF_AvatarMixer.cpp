@@ -13,6 +13,7 @@
 
 #if AVATAR_DEBUG_LOG
 #include <GCS_MAVLink/GCS.h>
+#include <AP_Logger/AP_Logger.h>
 #endif
 
 namespace AP_Motors6DOF_Mixer {
@@ -351,6 +352,29 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
                     (double)inputs.forward,
                     (double)inputs.plane.transition_progress,
                     (double)inputs.pitch);
+            }
+            // Dataflash log of the copter-mode tilt chain at 20 Hz, to isolate
+            // what caps forward tilt in QLOITER. Fwd is the forward demand into
+            // the mixer (= -sin(lean), saturates the TVC input at AVATAR_FORWARD_INPUT_MAX);
+            // FCmd is what the TVC received; TPit is the raw (pre-cap) TVC target angle;
+            // PNrm is the TVC pitch output before the cruise cap; Tilt is the capped
+            // servo command actually sent (= RCOU.C5 normalised). If TPit/PNrm plateau
+            // below the cap, the limit is upstream (forward demand); if they hit the
+            // cap and Tilt clamps, the cruise cap is the limit.
+            static uint32_t last_tvc_log_ms = 0;
+            if (now_ms - last_tvc_log_ms >= 50) {
+                last_tvc_log_ms = now_ms;
+                AP::logger().WriteStreaming("AVTL",
+                    "TimeUS,Fwd,FCmd,VMag,TPit,PNrm,Tilt,Thr",
+                    "Qfffffff",
+                    AP_HAL::micros64(),
+                    (double)inputs.forward,
+                    (double)outputs.debug_data.forward_cmd,
+                    (double)outputs.debug_data.vector_magnitude,
+                    (double)outputs.debug_data.target_pitch_deg,
+                    (double)tvc_out.pitch_angle_norm,
+                    (double)outputs.tilt_angle,
+                    (double)outputs.debug_data.total_throttle);
             }
         }
 #endif

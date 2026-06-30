@@ -276,6 +276,13 @@ Q_WP_RADIUS = 10
 
 Large waypoint radius prevents oscillation around waypoints the blimp cannot physically turn sharp enough to hit.
 
+**`Q_LOIT_ACC_MAX` / `Q_LOIT_BRK_ACCEL` / `Q_LOIT_BRK_JERK` are the deliberate "accelerate/brake slowly" levers (indoor blimp case).** They form a trio that shapes loiter motion — defaults are 500 / 250 / 500; the blimp values above (50 / 25 / 100) are much gentler so the airship eases into and out of motion indoors without overshooting:
+- `Q_LOIT_ACC_MAX` — bounds the commanded velocity ramp (lower = slower forward acceleration)
+- `Q_LOIT_BRK_ACCEL` — bounds stick-release braking (lower = gentler stop)
+- `Q_LOIT_BRK_JERK` — bounds how fast braking ramps in (lower = softer onset of the stop)
+
+⚠️ **All three MUST be raised back toward default (500 / 250 / 500) on any normal-inertia aircraft.** Leaving them low caps how hard the vehicle can accelerate. On a tilt-rotor (Avatar) this also caps forward wing tilt in QLOITER: a low accel ceiling means the loiter controller never demands enough lean → the 6DoF `−sin(lean)` forward command stays small → the wings never tilt fully forward. A leftover low value here was traced as the cause of "QLOITER won't tilt the wings forward" on the Avatar (June 2026).
+
 ### PID tuning (blimp-specific starting points)
 ```
 Q_A_RAT_RLL_P = 0.05
