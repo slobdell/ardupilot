@@ -184,10 +184,21 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         const float yaw_norm = inputs.plane.use_pid_yaw
             ? inputs.yaw
             : (inputs.plane.rudder_input / 4500.0f);
-        float yaw_delta_b = yaw_norm * cos_tilt_b;
         outputs.rudder_out = yaw_norm;
-        outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_demand + yaw_delta_b, 0.0f, 1.0f);
-        outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_demand - yaw_delta_b, 0.0f, 1.0f);
+        // [AV-INVAR:rear-pitch-priority] — the rear motors carry the pitch/throttle common
+        // mode AND the yaw differential on two shared actuators. Prioritize the common mode:
+        // it keeps the aircraft stable (pitch); yaw only holds heading. Clamp the common mode
+        // to [0,1], then give yaw only the symmetric headroom that remains, so a large yaw
+        // demand can never rail a rear motor and starve pitch authority. A leftover full yaw
+        // split did exactly that → STABILIZE nose-up departure (log 00000072.BIN). No-op in
+        // the unsaturated case (behaviour identical to before for tuned normal flight).
+        float rear_common = constrain_float(rear_demand, 0.0f, 1.0f);
+        float yaw_room    = fminf(rear_common, 1.0f - rear_common);
+        float yaw_demand  = yaw_norm * cos_tilt_b;
+        float yaw_delta_b = constrain_float(yaw_demand, -yaw_room, yaw_room);
+        outputs.limit.yaw = (fabsf(yaw_demand) > yaw_room + 1e-4f);
+        outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = rear_common + yaw_delta_b;
+        outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = rear_common - yaw_delta_b;
 
 #if AVATAR_DEBUG_LOG
         {
@@ -322,9 +333,14 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // Yaw: attitude PID output drives differential between the two rear motors, fading
         // with cos_tilt. [AV-INVAR:yaw-handoff-cos-tilt] — see Avatar_Design.md § 9
         float rear_thrust = (inputs.throttle - inputs.pitch) * cos_tilt;
-        float yaw_delta = inputs.yaw * cos_tilt;
-        outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = constrain_float(rear_thrust + yaw_delta, 0.0f, 1.0f);
-        outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = constrain_float(rear_thrust - yaw_delta, 0.0f, 1.0f);
+        // [AV-INVAR:rear-pitch-priority] — same shared-actuator priority as the plane branch:
+        // preserve the pitch/throttle common mode, give yaw only the leftover symmetric
+        // headroom so it can never rail a rear motor and starve pitch. No-op unsaturated.
+        float rear_common = constrain_float(rear_thrust, 0.0f, 1.0f);
+        float yaw_room    = fminf(rear_common, 1.0f - rear_common);
+        float yaw_delta   = constrain_float(inputs.yaw * cos_tilt, -yaw_room, yaw_room);
+        outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = rear_common + yaw_delta;
+        outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = rear_common - yaw_delta;
         outputs.rudder_out   = inputs.yaw;
         outputs.aileron_out  = -inputs.roll;
         outputs.elevator_out = -cos_tilt;

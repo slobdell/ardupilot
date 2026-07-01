@@ -826,6 +826,18 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 ---
 
+### [AV-INVAR:rear-pitch-priority]
+
+**What:** The two rear motors carry the pitch/throttle common mode (`rear_demand`) and the yaw differential (`yaw_delta`) on the same two shared actuators. On saturation the common mode is prioritized: `rear_demand` is clamped to [0,1] first, then yaw receives only the symmetric headroom that remains (`yaw_room = min(rear_common, 1 - rear_common)`, applied as `rear_common ± yaw_delta`). Yaw is sacrificed before pitch.
+
+**Where:** `AP_Motors6DOF_AvatarMixer.cpp` — both the plane STABILIZE branch (STATE B) and the copter/TVC branch (STATE C), which share the identical `rear_common ± yaw_delta` pattern. The plane branch also sets `outputs.limit.yaw` when the clamp is active. It is a no-op when unsaturated, so tuned normal flight is bit-for-bit unchanged. Covered by `[AV-INVAR:rear-pitch-priority]` tests in `tests/mixer_test` (Group N).
+
+**Why:** The priority is the *inverse* of the wing-motor desaturation (`p_shift`, which preserves the roll differential and sacrifices common-mode throttle). For the rear pair the consequences are asymmetric: losing yaw is a recoverable heading drift, but losing pitch is an unrecoverable nose-up departure. A leftover full yaw split — front wing-motor thrust imbalance driving the yaw PID hard — railed one rear motor and starved the common mode, causing an uncommanded pitch-up to 52° in STABILIZE (log 00000072.BIN). The previous independent per-motor clamps truncate *both* pitch and yaw; this reallocation keeps pitch intact.
+
+**This does not remove the disturbance** — it makes the failure survivable. The root cause (front wing-motor thrust imbalance inducing yaw) must still be corrected. Compounds with `[AV-INVAR:yaw-handoff-cos-tilt]`: `cos_tilt_b` already shrinks the rear common-mode headroom toward cruise before yaw is allocated.
+
+---
+
 ### [AV-INVAR:tilt-servo-tracking]
 
 **What:** In copter mode, `outputs.tilt_angle` (the servo command) is set to the TVC target immediately — the servo moves as fast as it physically can. `state.current_tilt_deg` is a separate software model of where the servo physically is, updated at a rate-limited speed each loop. All motor mixing (`cos_tilt` for roll authority, rear motor scaling) and the throttle transient scaling use `state.current_tilt_deg`, not the commanded target.

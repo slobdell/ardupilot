@@ -375,6 +375,62 @@ void avatar_plane_wings_vertical_rear_motor_driven_by_throttle_minus_pitch()
     end_test();
 }
 
+// [AV-INVAR:rear-pitch-priority]
+void stabilize_rear_yaw_clamped_to_headroom_preserves_pitch_common_mode()
+{
+    // Wings vertical (cos_tilt = 1), high common-mode throttle (0.9), and a full
+    // yaw demand that would otherwise rail a rear motor and crush pitch authority.
+    //   rear_common = 0.9  →  yaw_room = min(0.9, 0.1) = 0.1
+    //   yaw_delta clamped from 1.0 → 0.1
+    //   YAW_LEFT[3]  = 0.9 + 0.1 = 1.0
+    //   YAW_RIGHT[2] = 0.9 - 0.1 = 0.8   (common mode 0.9 fully preserved)
+    // Under the old independent clamps YAW_RIGHT would have been 0.0 and the
+    // common-mode average would have collapsed to 0.5 — the STABILIZE nose-up
+    // departure. Pitch is prioritized; yaw is sacrificed to the leftover headroom.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 1.0f;  // wings vertical → cos_tilt = 1
+    in.plane.use_pid_yaw       = true;  // STABILIZE: yaw from copter attitude PID
+    in.plane.throttle_pct      = 90.0f;
+    in.pitch                   = 0.0f;
+    in.yaw                     = 1.0f;  // full yaw demand → would saturate
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(1.0f, out.motor_thrust[3], 0.001f); // YAW_LEFT railed but not clipped
+    CHECK_NEAR(0.8f, out.motor_thrust[2], 0.001f); // YAW_RIGHT keeps common mode
+    // Common-mode (pitch/throttle) average is preserved exactly.
+    CHECK_NEAR(0.9f, (out.motor_thrust[2] + out.motor_thrust[3]) * 0.5f, 0.001f);
+    CHECK_TRUE(out.limit.yaw); // yaw was headroom-limited
+    end_test();
+}
+
+// [AV-INVAR:rear-pitch-priority]
+void stabilize_rear_yaw_within_headroom_is_unaffected()
+{
+    // Wings vertical, hover throttle (0.5) so yaw_room = 0.5, yaw demand 0.2 fits.
+    //   YAW_LEFT[3]  = 0.5 + 0.2 = 0.7
+    //   YAW_RIGHT[2] = 0.5 - 0.2 = 0.3
+    // The clamp is inactive — behaviour is identical to the pre-change mixer, so
+    // tuned normal flight is unchanged and limit.yaw stays false.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 1.0f;
+    in.plane.use_pid_yaw       = true;
+    in.plane.throttle_pct      = 50.0f;
+    in.pitch                   = 0.0f;
+    in.yaw                     = 0.2f;  // within headroom
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(0.7f, out.motor_thrust[3], 0.001f);
+    CHECK_NEAR(0.3f, out.motor_thrust[2], 0.001f);
+    CHECK_FALSE(out.limit.yaw);
+    end_test();
+}
+
 // ============================================================================
 // LAYER 3: AvatarMixer — COPTER MODE (TVC brain drives tilt)
 // ============================================================================
@@ -2192,6 +2248,10 @@ int main()
     angle_latch_without_snap_servo_retracts_when_damp_horiz_drops_to_zero();
     angle_latch_non_zero_damp_horiz_activates_force_block_past_pilot_tilt();
     angle_latch_fade_diminishing_damp_horiz_converges_to_pilot_tilt();
+
+    std::printf("\n-- Group N: Rear-motor pitch priority on saturation [AV-INVAR:rear-pitch-priority] --\n");
+    stabilize_rear_yaw_clamped_to_headroom_preserves_pitch_common_mode();
+    stabilize_rear_yaw_within_headroom_is_unaffected();
 
     std::printf("\n-- Layer 4: BlimpMixer plane mode --\n");
     blimp_plane_neutral_stick_gives_full_forward_tilt();
