@@ -431,6 +431,127 @@ void stabilize_rear_yaw_within_headroom_is_unaffected()
     end_test();
 }
 
+// [AV-INVAR:pitch-before-throttle]
+void copter_full_throttle_nose_up_transfers_front_excess_to_rear()
+{
+    // The forward-flip scenario: full throttle, nose-down disturbance, PID demands
+    // nose-up (pitch = +0.3). Wings vertical (cos_tilt = 1).
+    //   front raw = 1.0 + 0.3 = 1.3 → rails at 1.0, excess 0.3
+    //   rear      = (1.0 - 0.3 - 0.3) * 1 = 0.4   (excess transferred)
+    // Old behaviour: rear = 0.7 — the front half of the couple was silently lost
+    // and pitch loop gain halved at exactly the moment of largest disturbance.
+    // Now the full couple (front - rear = 0.6 = 2 * pitch) is preserved; the cost
+    // is common-mode lift, not pitch authority. limit.pitch must NOT fire — the
+    // moment was fully delivered through the rear pair.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_copter_inputs();
+    in.throttle = 1.0f;
+    in.pitch    = 0.3f;
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(1.0f, out.motor_thrust[0], 0.02f); // fronts railed (same as before)
+    CHECK_NEAR(1.0f, out.motor_thrust[1], 0.02f);
+    CHECK_NEAR(0.4f, out.motor_thrust[2], 0.02f); // rears carry the transferred excess
+    CHECK_NEAR(0.4f, out.motor_thrust[3], 0.02f);
+    CHECK_FALSE(out.limit.pitch);                 // couple fully delivered
+    end_test();
+}
+
+// [AV-INVAR:pitch-before-throttle]
+void copter_full_throttle_nose_down_transfers_rear_excess_to_front()
+{
+    // Mirror case: full throttle, nose-down demand (pitch = -0.3), wings vertical.
+    //   rear raw  = (1.0 + 0.3) * 1 = 1.3 → rails at 1.0, excess 0.3
+    //   front     = 1.0 - 0.3 - 0.3 = 0.4          (excess transferred)
+    // Old behaviour: front = 0.7, rear clipped to 1.0 — half the couple lost.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_copter_inputs();
+    in.throttle = 1.0f;
+    in.pitch    = -0.3f;
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(0.4f, out.motor_thrust[0], 0.02f); // fronts give up the rear's excess
+    CHECK_NEAR(0.4f, out.motor_thrust[1], 0.02f);
+    CHECK_NEAR(1.0f, out.motor_thrust[2], 0.02f); // rears railed
+    CHECK_NEAR(1.0f, out.motor_thrust[3], 0.02f);
+    CHECK_FALSE(out.limit.pitch);
+    end_test();
+}
+
+// [AV-INVAR:pitch-before-throttle]
+void copter_unsaturated_pitch_transfer_is_noop()
+{
+    // Hover throttle with moderate pitch: nothing rails, so the transfer must be
+    // bit-for-bit inactive — tuned normal flight is unchanged.
+    //   front = 0.5 + 0.2 = 0.7,  rear = (0.5 - 0.2) * 1 = 0.3
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_copter_inputs();
+    in.throttle = 0.5f;
+    in.pitch    = 0.2f;
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(0.7f, out.motor_thrust[0], 0.02f);
+    CHECK_NEAR(0.7f, out.motor_thrust[1], 0.02f);
+    CHECK_NEAR(0.3f, out.motor_thrust[2], 0.02f);
+    CHECK_NEAR(0.3f, out.motor_thrust[3], 0.02f);
+    CHECK_FALSE(out.limit.pitch);
+    end_test();
+}
+
+// [AV-INVAR:pitch-before-throttle]
+void copter_low_throttle_rear_railed_at_zero_does_not_boost_fronts()
+{
+    // Lift-reducing only: at low throttle a big nose-up demand rails the rears at 0.
+    // The undelivered pitch must NOT be added to the fronts (no motor spin-up near
+    // the ground) — and limit.pitch MUST fire so the I-term stops winding.
+    //   rear raw = (0.1 - 0.5) * 1 = -0.4 → railed at 0, boost direction excluded
+    //   front    = 0.1 + 0.5 = 0.6         (unchanged — no transfer)
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_copter_inputs();
+    in.throttle = 0.1f;
+    in.pitch    = 0.5f;
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(0.6f, out.motor_thrust[0], 0.02f);
+    CHECK_NEAR(0.6f, out.motor_thrust[1], 0.02f);
+    CHECK_NEAR(0.0f, out.motor_thrust[2], 0.02f);
+    CHECK_NEAR(0.0f, out.motor_thrust[3], 0.02f);
+    CHECK_TRUE(out.limit.pitch);                  // pitch genuinely undelivered
+    end_test();
+}
+
+// [AV-INVAR:pitch-before-throttle] + [AV-INVAR:rear-pitch-priority]
+void copter_yaw_room_respects_post_transfer_rear_common_mode()
+{
+    // Full hierarchy check: pitch > yaw > throttle. Full throttle + nose-up demand
+    // shrinks the rear common mode to 0.4 via the transfer; a full yaw demand then
+    // gets only the symmetric headroom around THAT value.
+    //   rear_common = 0.4 → yaw_room = min(0.4, 0.6) = 0.4
+    //   YAW_LEFT[3]  = 0.4 + 0.4 = 0.8,  YAW_RIGHT[2] = 0.4 - 0.4 = 0.0
+    // Common mode (pitch) average is preserved exactly at 0.4.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_copter_inputs();
+    in.throttle = 1.0f;
+    in.pitch    = 0.3f;
+    in.yaw      = 1.0f;
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(0.8f, out.motor_thrust[3], 0.02f);
+    CHECK_NEAR(0.0f, out.motor_thrust[2], 0.02f);
+    CHECK_NEAR(0.4f, (out.motor_thrust[2] + out.motor_thrust[3]) * 0.5f, 0.02f);
+    end_test();
+}
+
 // ============================================================================
 // LAYER 3: AvatarMixer — COPTER MODE (TVC brain drives tilt)
 // ============================================================================
@@ -2252,6 +2373,13 @@ int main()
     std::printf("\n-- Group N: Rear-motor pitch priority on saturation [AV-INVAR:rear-pitch-priority] --\n");
     stabilize_rear_yaw_clamped_to_headroom_preserves_pitch_common_mode();
     stabilize_rear_yaw_within_headroom_is_unaffected();
+
+    std::printf("\n-- Group O: Pitch before throttle on saturation [AV-INVAR:pitch-before-throttle] --\n");
+    copter_full_throttle_nose_up_transfers_front_excess_to_rear();
+    copter_full_throttle_nose_down_transfers_rear_excess_to_front();
+    copter_unsaturated_pitch_transfer_is_noop();
+    copter_low_throttle_rear_railed_at_zero_does_not_boost_fronts();
+    copter_yaw_room_respects_post_transfer_rear_common_mode();
 
     std::printf("\n-- Layer 4: BlimpMixer plane mode --\n");
     blimp_plane_neutral_stick_gives_full_forward_tilt();

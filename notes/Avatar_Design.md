@@ -838,6 +838,26 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 ---
 
+### [AV-INVAR:pitch-before-throttle]
+
+**What:** In the copter/TVC branch, pitch demand that one motor pair cannot deliver because it is railed at 1.0 is transferred to the other pair as a common-mode reduction, instead of being truncated. Front pair rails high (`throttle_thrust + pitch > 1`, nose-up demand at full throttle): the excess is subtracted from the rear pair (`rear = (throttle − pitch − front_excess) × cos_tilt`). Rear pair rails high (`(throttle − pitch) × cos_tilt > 1`, nose-down demand at full throttle): the excess is subtracted from the front base. The transfer is **lift-reducing only** — a pair railed at 0 does *not* boost the other pair.
+
+**Where:** `AP_Motors6DOF_AvatarMixer.cpp` — copter/TVC branch (STATE C), between the `base_thrust`/`rear_thrust` computation and the roll headroom block. No-op when unsaturated, so tuned normal flight is bit-for-bit unchanged. Covered by Group O tests in `tests/mixer_test`.
+
+**Why:** At full throttle the pitch couple (front `+pitch`, rear `−pitch × cos_tilt`) loses its increase side to the 1.0 rail — the pitch loop gain halves precisely when the disturbance is largest (e.g. a full-throttle spool transient where the rear motors build thrust faster than the fronts and pitch the nose down). The transfer restores the full tuned couple by sacrificing collective lift, which at full throttle means a slightly reduced climb — recoverable. A pitch departure is not. Same asymmetric-consequence argument as `[AV-INVAR:rear-pitch-priority]`; this extends the allocation hierarchy to pitch > roll/yaw > throttle. Precedent: stock ArduCopter's mixer prioritises roll/pitch over throttle the same way.
+
+**Why lift-reducing only:** The symmetric case — boosting the opposite pair when one pair rails at 0 — would let a wound-up or railed pitch demand spin motors up at low throttle, i.e. near the ground during landing/flare. In the low-side case the old behaviour is kept: the demand is truncated and `limit.pitch` fires so the I-term stops winding.
+
+**`limit.pitch` semantics changed:** It no longer fires merely because a pair railed at 1.0 — if the transfer delivered the moment through the other pair, the PID is not limited and must not be told it is. It fires only when pitch remains undelivered after the transfer: the receiving pair ran out of downward headroom (`base_thrust < 0` or `rear_thrust < 0` post-transfer).
+
+**Interaction with the rest of the mixer:** The transfer happens *before* roll headroom (front pair) and yaw headroom (rear pair) are computed, so `[AV-INVAR:rear-pitch-priority]`'s `yaw_room` automatically respects the post-transfer rear common mode — the full hierarchy is pitch > roll/yaw > throttle with no other logic touched. The front→rear transfer is scaled by `cos_tilt`, matching how all rear pitch authority is scaled; both transfers fade out as the rear pair loses pitch relevance toward 90°.
+
+**Bounded steal:** The transfer magnitude is bounded by `|inputs.pitch|`, which is bounded by the copter rate PID output limits — and it can only drive the receiving pair to 0, never negative. Worst case at full throttle is one pair at 1.0 and the other at 0 (maximum moment, half lift). No separate cap parameter is needed.
+
+**Plane branch deliberately not covered:** In plane mode the front motors carry no pitch term (throttle ± roll only) — pitch is rear motor + elevator. Extending pitch-before-throttle there would mean cross-pair stealing front throttle when the rears rail, a separate design decision with TECS interactions. Scoped as future work.
+
+---
+
 ### [AV-INVAR:tilt-servo-tracking]
 
 **What:** In copter mode, `outputs.tilt_angle` (the servo command) is set to the TVC target immediately — the servo moves as fast as it physically can. `state.current_tilt_deg` is a separate software model of where the servo physically is, updated at a rate-limited speed each loop. All motor mixing (`cos_tilt` for roll authority, rear motor scaling) and the throttle transient scaling use `state.current_tilt_deg`, not the commanded target.

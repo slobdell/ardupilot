@@ -308,7 +308,22 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // the tilt angle in response to attitude changes, so the two loops don't fight each other.
         // Headroom is computed around the pitch-shifted base to keep roll clipping symmetric.
         float base_thrust = throttle_thrust + inputs.pitch;
-        outputs.limit.pitch = (base_thrust > 1.0f || base_thrust < 0.0f);
+        float rear_thrust = (inputs.throttle - inputs.pitch) * cos_tilt;
+        // [AV-INVAR:pitch-before-throttle] — cross-pair transfer of undeliverable pitch.
+        // When one pair rails at 1.0, the pitch it could not deliver is taken out of the
+        // other pair's common mode instead of being truncated. Without this, throttle
+        // saturation halves the pitch loop gain exactly when the disturbance is largest
+        // (full-throttle spool transient → flip risk). Costs lift, which is recoverable;
+        // a pitch departure is not. Lift-reducing only: low-side clips (motor railed at 0)
+        // are NOT boosted on the other pair, so a wound-up PID can never spin motors up
+        // near the ground. No-op in the unsaturated case.
+        const float front_excess = fmaxf(0.0f, base_thrust - 1.0f);
+        rear_thrust -= front_excess * cos_tilt;
+        const float rear_excess = fmaxf(0.0f, rear_thrust - 1.0f);
+        base_thrust -= rear_excess;
+        // Anti-windup fires only if pitch remains undelivered after the transfer —
+        // i.e. the receiving pair also ran out of downward headroom.
+        outputs.limit.pitch = (base_thrust < 0.0f) || (rear_thrust < 0.0f);
         base_thrust = constrain_float(base_thrust, 0.0f, 1.0f);
         // Track effective wing-motor throttle for smooth copter→plane handoff.
         // Reset blend to 0 each frame so the first plane-mode frame starts the ramp.
@@ -330,9 +345,9 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = right_out;
         // Rear motors fade to zero at 90° and stay off beyond — fixed-direction thrust
         // loses pitch relevance (and would invert without the floor) past 90°.
+        // rear_thrust computed above (with [AV-INVAR:pitch-before-throttle] transfer applied).
         // Yaw: attitude PID output drives differential between the two rear motors, fading
         // with cos_tilt. [AV-INVAR:yaw-handoff-cos-tilt] — see Avatar_Design.md § 9
-        float rear_thrust = (inputs.throttle - inputs.pitch) * cos_tilt;
         // [AV-INVAR:rear-pitch-priority] — same shared-actuator priority as the plane branch:
         // preserve the pitch/throttle common mode, give yaw only the leftover symmetric
         // headroom so it can never rail a rear motor and starve pitch. No-op unsaturated.
