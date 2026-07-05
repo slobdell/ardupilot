@@ -179,7 +179,8 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         outputs.aileron_out  = -inputs.plane.aileron_input / 4500.0f;
         float rear_demand = (throttle_pct - inputs.pitch) * cos_tilt_b;
         outputs.limit.pitch = (rear_demand > 1.0f || rear_demand < 0.0f);
-        // Yaw: STABILIZE uses copter attitude PID (inputs.yaw); all other plane modes use raw rudder stick.
+        // Yaw: all nav plane modes (STABILIZE, CRUISE, AUTO, ...) use the copter attitude
+        // PID (inputs.yaw); manual-family modes (MANUAL/ACRO/TRAINING) use raw rudder stick.
         // [AV-INVAR:stabilize-yaw-pid] and [AV-INVAR:yaw-handoff-cos-tilt] — see Avatar_Design.md § 9
         const float yaw_norm = inputs.plane.use_pid_yaw
             ? inputs.yaw

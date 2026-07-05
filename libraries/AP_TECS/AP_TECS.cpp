@@ -438,7 +438,12 @@ void AP_TECS::_update_speed(float DT)
     // limit the airspeed to a minimum of 3 m/s
     float min_airspeed = 3.0;
 #if ENABLE_TRICOPTER_VTOL_BACKEND
-    min_airspeed = 0.0f;  // both blimp and avatar are zero-stall-speed VTOL vehicles
+    // [AV-INVAR:airspeed-cruise-gain] — see Avatar_Design.md § 9.
+    // Zero-stall-speed VTOL vehicles (blimp, avatar) must be allowed a zero airspeed
+    // STATE. This removes stock ArduPilot's floor on _TAS_state, which is what makes
+    // AIRSPEED_CRUISE = 0 a divide-by-zero in the pitch demand (gainInv = TAS × g).
+    // AIRSPEED_CRUISE must stay >= ~1; it is the pitch-loop gain denominator.
+    min_airspeed = 0.0f;
 #endif
 
     // Reset states of time since last update is too large
@@ -866,6 +871,41 @@ float AP_TECS::_get_i_gain(void)
 }
 
 /*
+  measured pitch used by the no-airspeed pitch-to-throttle mapping.
+
+  [AV-INVAR:tecs-synth-pitch] — see Avatar_Design.md § 9
+  Stock ArduPlane uses AHRS pitch: on a conventional plane, sustained climb =
+  sustained nose-up, so fuselage attitude is an honest climb-effort signal.
+  Avatar holds the fuselage level by design (elevator + rear motor), so AHRS
+  pitch reads ~0 forever and the throttle demand pins at TRIM_THROTTLE no
+  matter how vertical the rotors are. The earth-frame thrust-vector elevation
+  is Avatar's honest equivalent of "pitch": QuadPlane::update() supplies the
+  body-relative term (90° − tilt_deg) each loop and the helper below adds AHRS
+  pitch (vertical rotors + level fuselage ⇒ 90° ⇒ THR_MAX, horizontal ⇒ 0° ⇒
+  cruise throttle).
+  Blimp keeps the stock path: its tilt geometry differs (0–180° range) so this
+  mapping is wrong arithmetic for it, and buoyancy means the sink-on-tilt-up
+  failure this fixes does not exist there (same exclusion rationale as
+  [AV-INVAR:min-thr-tilt]).
+ */
+float AP_TECS::_pitch_measured_for_throttle(void) const
+{
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    if (!g_config.tricopter_is_blimp) {
+        // Earth-frame thrust-vector elevation: the tilt term is body-relative, so
+        // add actual fuselage pitch (mirrors the TVC's pitch compensation,
+        // Avatar_Design.md § 4.2). Nominally the level-hold keeps fuselage pitch
+        // ~0 and this reduces to the tilt term alone — but a real sustained nose
+        // excursion (e.g. stall-prevention nose-up with saturated elevator) must
+        // still raise throttle exactly as stock TECS would. This is a superset of
+        // stock behaviour, not a replacement.
+        return _ahrs.get_pitch() + _synthetic_pitch_rad;
+    }
+#endif
+    return _ahrs.get_pitch();
+}
+
+/*
   calculate throttle, non-airspeed case
  */
 void AP_TECS::_update_throttle_without_airspeed(int16_t throttle_nudge, float pitch_trim_deg)
@@ -887,7 +927,7 @@ void AP_TECS::_update_throttle_without_airspeed(int16_t throttle_nudge, float pi
     // so that the throttle mapping adjusts for the effect of pitch control errors
     _pitch_demand_lpf.apply(_pitch_dem, _DT);
     const float pitch_demand_hpf = _pitch_dem - _pitch_demand_lpf.get();
-    _pitch_measured_lpf.apply(_ahrs.get_pitch(), _DT);
+    _pitch_measured_lpf.apply(_pitch_measured_for_throttle(), _DT);   // [AV-INVAR:tecs-synth-pitch]
     const float pitch_corrected_lpf = _pitch_measured_lpf.get() - radians(pitch_trim_deg);
     const float pitch_blended = pitch_demand_hpf + pitch_corrected_lpf;
 
@@ -1160,7 +1200,7 @@ void AP_TECS::_initialise_states(float hgt_afe)
         _pitch_demand_lpf.set_cutoff_frequency(fc);
         _pitch_measured_lpf.set_cutoff_frequency(fc);
         _pitch_demand_lpf.reset(_ahrs.get_pitch());
-        _pitch_measured_lpf.reset(_ahrs.get_pitch());
+        _pitch_measured_lpf.reset(_pitch_measured_for_throttle());   // [AV-INVAR:tecs-synth-pitch]
 
     } else if (_flight_stage == AP_FixedWing::FlightStage::TAKEOFF || _flight_stage == AP_FixedWing::FlightStage::ABORT_LANDING) {
         
@@ -1186,7 +1226,7 @@ void AP_TECS::_initialise_states(float hgt_afe)
         _max_climb_scaler = 1.0f;
         _max_sink_scaler = 1.0f;
         _pitch_demand_lpf.reset(_ahrs.get_pitch());
-        _pitch_measured_lpf.reset(_ahrs.get_pitch());
+        _pitch_measured_lpf.reset(_pitch_measured_for_throttle());   // [AV-INVAR:tecs-synth-pitch]
         
 
         if (!_flag_have_reset_after_takeoff) {

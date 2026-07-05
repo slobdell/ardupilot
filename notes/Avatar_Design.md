@@ -292,6 +292,25 @@ This prevents the TVC from commanding past horizontal in copter mode, where ther
 
 **Servo calibration (needs aircraft).** Horizontal has no hardware reference point (unlike vertical, which uses `SERVO5_TRIM`). Calibration procedure: physically set wings to exact horizontal, read the servo PWM, set `SERVO5_MIN` to that value. Then set the new physical max (e.g., 95°) as the actual MIN after extending travel. Keep `SERVO5_TRIM` at the vertical (hover) position — this is the invariant the TVC normalization depends on. FBWA equilibrium pitch is found by the ArduPlane pitch PID integrator, not by a static trim value, so there is no equivalent "horizontal trim" needed in the firmware.
 
+### 4.4.4 CRUISE/AUTO Tilt Demand Chain and Its Two Tuning Parameters
+
+In TECS modes (CRUISE, AUTO, …) with no airspeed sensor, the pilot/mission never commands tilt directly. The chain is:
+
+```
+pitch stick → target-altitude ramp (±FBWB_CLIMB_RATE m/s at full stick)
+           → TECS altitude/climb-rate error
+           → nav_pitch_cd  (γ ≈ v_z_demand / AIRSPEED_CRUISE radians, + error/integrator terms)
+           → tilt angle    ([AV-INVAR:tilt-follows-nav-pitch])
+```
+
+**`FBWB_CLIMB_RATE`** — the full-stick climb-rate demand. NOT a tilt limit. Sets the initial tilt response via the ratio below, and the rate at which escalation winds up.
+
+**`AIRSPEED_CRUISE`** — the airspeed TECS *assumes* when converting climb demands to pitch angles (`gain = 1/(V·g)`); with no sensor it is also the `_TAS_state` fallback. NOT a speed target (the airspeed demand path is inert with `SKE_weighting = 0`). See `[AV-INVAR:airspeed-cruise-gain]`.
+
+**Full-stick initial tilt-up ≈ `FBWB_CLIMB_RATE / AIRSPEED_CRUISE` radians** (clipped by `TECS_CLMB_MAX` and `PTCH_LIM_MAX_DEG`). Current values 2/3 rad ≈ 38°. Raising `FBWB_CLIMB_RATE` to 5 (= `TECS_CLMB_MAX`) makes full stick demand ≥90° immediately — FBWA-bench-test feel. This ratio is the CRUISE stick-feel knob.
+
+**90° tilt is reachable but earned, not commanded:** if the demanded climb is not achieved, altitude error adds ~4°/m of lag and the integrator is allowed to wind the demand to `PTCH_LIM_MAX`+5° within ~4–6 s. With `[AV-INVAR:tecs-synth-pitch]` raising throttle alongside tilt, the aircraft normally settles at the minimum tilt that delivers the climb — vertical is the last resort, which is the intended energy-manager behaviour.
+
 ### 4.5 Copter Mode Elevator Behavior
 
 In copter mode the elevator (V-tail pitch surface) tracks the wing tilt angle via `cos(tilt_deg)`:
@@ -790,7 +809,9 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 ### [AV-INVAR:stabilize-yaw-pid]
 
-**What:** In STABILIZE plane mode, the pilot's rudder stick is converted to a yaw rate demand (via `get_pilot_input_yaw_rate_cds()`, which applies expo and `Q_YAW_RATE_MAX` scaling) and written to the copter attitude controller via `rate_bf_yaw_target()`. The mixer plane branch then uses `inputs.yaw` (the PID output) for motor differential and rudder surface — identical to the copter mode path.
+**What:** In all nav plane modes (STABILIZE, CRUISE, AUTO, RTL, …), the pilot's rudder stick is converted to a yaw rate demand (via `get_pilot_input_yaw_rate_cds()`, which applies expo and `Q_YAW_RATE_MAX` scaling) and written to the copter attitude controller via `rate_bf_yaw_target()`. The mixer plane branch then uses `inputs.yaw` (the PID output) for motor differential and rudder surface — identical to the copter mode path. Manual-family modes (MANUAL/ACRO/TRAINING) are excluded (`use_pid_yaw = false`): they never run the rate-target block, so the PID output would be stale, and raw rudder passthrough is their correct semantic.
+
+*Scope history:* originally STABILIZE-only; extended to all nav plane modes July 2026 so CRUISE climbs (rotors near vertical, rudder aerodynamically dead) get the same disturbance-yaw cancellation — front-wing-motor thrust imbalance yaw (log 00000072.BIN mechanism) is otherwise uncorrected outside STABILIZE. The theoretical cost — the PID damping coordinated-turn yaw rates in banked forward flight — was already present on the rudder surface in validated STABILIZE forward flight and proved benign (acts as a yaw damper); the stick-centered I-reset (`[AV-INVAR:passive-weathervane]`) keeps it P/D-only in hands-off nav turns. If CRUISE logs ever show L1 tracking degraded by skidding turns, the fix is a coordinated-turn feedforward on the yaw rate target (`g·tan(roll)/ground_speed`), not a revert.
 
 **Where:** Two locations:
 1. `ArduPlane/quadplane.cpp` — Avatar FBWA block, after `rate_bf_roll_target()`.
@@ -958,6 +979,34 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 ---
 
+### [AV-INVAR:tecs-synth-pitch]
+
+**What:** In the no-airspeed TECS pitch-to-throttle mapping (`_update_throttle_without_airspeed`), the "measured pitch" input is the **earth-frame thrust-vector elevation**: `ahrs_pitch + (90° − current_tilt_deg)`. The body-relative tilt term is supplied by `QuadPlane::update()` each loop via `set_synthetic_pitch()`; TECS adds AHRS pitch internally. Rotors vertical + level fuselage ⇒ 90° ⇒ throttle → `THR_MAX`; rotors horizontal ⇒ 0° ⇒ `TRIM_THROTTLE`; past-horizontal descent ⇒ slightly negative ⇒ below trim. The LPF reset paths use the same substitution so mode entry starts the filter at the true current state.
+
+**Why the sum (not tilt alone):** the tilt servo angle is fuselage-relative; if the nose is pitched up 10° with rotors at 45°, the thrust line is at 55° in the earth frame. This mirrors the TVC's pitch compensation (§ 4.2 — absolute thrust direction is what matters). It also keeps stock TECS's response to *real* nose excursions: in the stall-prevention regime (elevator saturated, nose rising) stock TECS raises throttle because it reads real pitch — tilt-alone would be blind to that. Nominally the level-hold keeps fuselage pitch ≈ 0 and the sum reduces to the tilt term; the 5 s LPF filters transient wobbles. Result is a superset of stock behaviour, not a replacement.
+
+**Where:** Three locations: `AP_TECS.h` (setter + member, `#if ENABLE_TRICOPTER_VTOL_BACKEND`), `AP_TECS.cpp` (`_pitch_measured_for_throttle()` helper used at the `_pitch_measured_lpf` apply and both resets), `ArduPlane/quadplane.cpp` (per-loop feed in the PlaneInputs injection block).
+
+**Why:** Stock ArduPlane infers climb effort from fuselage attitude — valid on a conventional plane where climbing *is* pitching up. Avatar's elevator + rear motor hold the fuselage level at all times, so AHRS pitch reads ~0 forever and sustained throttle pins at `TRIM_THROTTLE` (45%) regardless of tilt. Failure scenario: TECS demands climb → tilt walks toward vertical → thrust at 45% < weight → sink → more tilt demand → pitch demand rails at 90° while the aircraft mushes down, with underspeed/badDescent protection inert in this configuration. The thrust-vector angle is the aircraft's honest equivalent of "pitch": TECS's heuristic was always "throttle ∝ how upward the thrust line points"; fuselage pitch was merely how a conventional plane exposes it.
+
+**Why the blimp is excluded** (`tricopter_is_blimp` keeps stock AHRS-pitch path): (1) different tilt geometry — the blimp's range spans 0–180° with a different cruise convention, so `90° − tilt` is wrong arithmetic for it (naively applied, emergency downward thrust would command *minimum* throttle); (2) buoyancy means the sink-on-tilt-up failure this fixes does not exist for it — same rationale as `[AV-INVAR:min-thr-tilt]`; (3) the blimp's plane mode is pilot-stick FBWA-style and has never flown TECS throttle modes. If the blimp ever flies FBWB/CRUISE/AUTO, add a blimp-specific tilt→pitch mapping using its own cruise-angle reference — do not reuse the Avatar formula.
+
+**Do not "fix" this back to `_ahrs.get_pitch()`** because the fuselage pitch "looks more correct" — a level fuselage is the *designed* state at every tilt angle and carries zero climb-effort information on this aircraft. Do not feed the synthetic value anywhere else in TECS (energy estimates, pitch demand); it is scoped to the throttle mapping only.
+
+**Default-safe:** `_synthetic_pitch_rad` defaults to 0 (= "rotors horizontal" = cruise throttle), which reproduces pre-fix behaviour if the setter is ever not called.
+
+---
+
+### [AV-INVAR:airspeed-cruise-gain]
+
+**What:** `AIRSPEED_CRUISE` must never be set below ~1 m/s (current value: 3). It is the TECS pitch-loop gain denominator, not a speed target.
+
+**Where:** Parameter file only; the code dependency is `AP_TECS.cpp` — `_EAS` fallback (`constrain(airspeed_cruise, min, max)` when no sensor) → `_TAS_state` → `gainInv = _TAS_state × g`, divided into the pitch demand. The backend patch that makes zero dangerous is the `min_airspeed = 0.0f` override in `_update_speed()` (tagged with this invariant), which removed stock ArduPilot's 3 m/s floor on `_TAS_state` because a zero-stall-speed vehicle must be allowed a zero airspeed *state*.
+
+**Why:** With no airspeed sensor, TECS "measures" airspeed as `AIRSPEED_CRUISE` and converts climb demands to pitch (=tilt) angles as `γ ≈ v_z / AIRSPEED_CRUISE`. Setting it to 0 makes `gainInv = 0` → division by zero → pitch demand rails between limits (bang-bang tilt). The zero-stall intuition ("this aircraft has no minimum speed, so zero all airspeed params") is exactly the mistake this invariant guards against: `AIRSPEED_MIN = 0` is correct, `AIRSPEED_CRUISE = 0` is a crash. Tuning meaning: lower = more tilt per unit climb demand/altitude error (twitchier CRUISE), higher = gentler. See § 4.4.4.
+
+---
+
 ### [AV-INVAR:plane-tilt-slew]
 
 **What:** In FBWA plane mode, `outputs.tilt_angle` (the servo command) is rate-limited before being written. The target is computed from `nav_pitch_cd` (pilot stick + TECS) as normal, but `state.current_tilt_deg` slews toward it at an asymmetric rate: fast toward vertical (Q_TILT_RATE_UP, servo physical speed) and slow toward horizontal (Q_TILT_RATE_DN, an independent design choice). `outputs.tilt_angle` is then derived from the slewed `state.current_tilt_deg`, so all downstream calculations (`tilt_deg_b`, `cos_tilt_b`, roll differential, rear motor) use the commanded position.
@@ -978,7 +1027,7 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 ### [AV-INVAR:passive-weathervane]
 
-**What:** In STABILIZE plane mode and QSTABILIZE, when the pilot has no rudder input (`get_pilot_input_yaw_rate_cds() == 0`), the yaw rate PID I-term is reset to zero each control loop before the rate controller runs. P and D continue to operate, providing yaw damping. When the pilot applies rudder input, the reset does not fire and the I-term accumulates normally, giving full PID authority for commanded yaw.
+**What:** In all nav plane modes (STABILIZE, CRUISE, AUTO, …) and QSTABILIZE, when the pilot has no rudder input (`get_pilot_input_yaw_rate_cds() == 0`), the yaw rate PID I-term is reset to zero each control loop before the rate controller runs. P and D continue to operate, providing yaw damping. When the pilot applies rudder input, the reset does not fire and the I-term accumulates normally, giving full PID authority for commanded yaw. (Scope extended alongside `[AV-INVAR:stabilize-yaw-pid]` July 2026; in hands-off banked nav turns the reset is what keeps the yaw PID from winding up against the coordinated-turn yaw rate.)
 
 **Where:** Two locations, both gated by `g_config.custom_weathervane`:
 1. `ArduPlane/quadplane.cpp` — Avatar FBWA block, STABILIZE branch: `attitude_control->get_rate_yaw_pid().reset_I()` before `rate_bf_yaw_target(pilot_yaw_cds)`.
@@ -988,6 +1037,6 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 **Why not QLOITER:** QLOITER has active weathervaning via `AC_WeatherVane` (see `[AV-INVAR:stabilize-yaw-pid]` and § 5.2). The I-term in QLOITER supports the active yaw rate commands from `AC_WeatherVane` and should not be zeroed.
 
-**Why not CRUISE:** CRUISE aerodynamically self-weathervanes through the fixed-wing control surfaces and natural fuselage stability at airspeed. No prop-based yaw intervention is needed or appropriate.
+**CRUISE note:** the I-reset now fires in CRUISE too (July 2026 scope extension). In forward flight it is a no-op for weathervaning (a steadily flying aircraft develops no sideslip for the fin to react to — weathervaning only exists when ground velocity is constrained), but it serves a second purpose there: keeping the yaw PID P/D-only during hands-off banked turns so it cannot wind up against the coordinated-turn yaw rate.
 
 **Do not apply to modes with active position or heading hold** — resetting I there would degrade tracking performance.

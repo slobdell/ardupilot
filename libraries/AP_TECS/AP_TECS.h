@@ -22,6 +22,7 @@
 #include <AP_Param/AP_Param.h>
 #include <AP_Vehicle/AP_FixedWing.h>
 #include <Filter/AverageFilter.h>
+#include <AP_CustomConfig/AP_CustomConfig.h>
 
 class AP_Landing;
 class AP_TECS {
@@ -37,6 +38,16 @@ public:
 
     /* Do not allow copies */
     CLASS_NO_COPY(AP_TECS);
+
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    // [AV-INVAR:tecs-synth-pitch] — see Avatar_Design.md § 9
+    // Avatar holds the fuselage level at all times, so AHRS pitch alone is useless as
+    // the climb-effort signal in the no-airspeed pitch-to-throttle mapping. The caller
+    // (QuadPlane::update) supplies the BODY-RELATIVE thrust elevation each loop:
+    // 90° − tilt_deg (rotors vertical ⇒ 90°, horizontal ⇒ 0°). TECS adds AHRS pitch
+    // internally to form the earth-frame thrust-vector elevation.
+    void set_synthetic_pitch(float pitch_rad) { _synthetic_pitch_rad = pitch_rad; }
+#endif
 
     // Update of the estimated height and height rate internal state
     // Update of the inertial speed rate internal state
@@ -448,6 +459,17 @@ private:
     // when calculating a pitch to throttle mapping.
     LowPassFilterFloat _pitch_demand_lpf;
     LowPassFilterFloat _pitch_measured_lpf;
+
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+    // [AV-INVAR:tecs-synth-pitch] — thrust-vector angle supplied by QuadPlane::update().
+    // 0 default = "rotors horizontal / cruise" ⇒ nominal throttle: the safe fallback if
+    // the setter is never called (matches pre-fix behaviour).
+    float _synthetic_pitch_rad = 0.0f;
+#endif
+
+    // measured pitch for the no-airspeed pitch-to-throttle mapping; Avatar substitutes
+    // the synthetic thrust-vector pitch. [AV-INVAR:tecs-synth-pitch]
+    float _pitch_measured_for_throttle(void) const;
 
     // aerodynamic load factor
     float _load_factor;

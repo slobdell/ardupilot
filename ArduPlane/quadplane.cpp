@@ -1906,6 +1906,16 @@ void QuadPlane::update(void)
         plane_inputs.pitch_cd = plane.nav_pitch_cd;
         plane_inputs.roll_cd = plane.nav_roll_cd;
 
+        // [AV-INVAR:tecs-synth-pitch] — see Avatar_Design.md § 9
+        // Feed TECS the thrust-vector angle as its "measured pitch" for the
+        // no-airspeed pitch-to-throttle mapping. Avatar's level fuselage makes
+        // AHRS pitch useless as a climb-effort signal; 90° − tilt is the honest
+        // equivalent (rotors vertical ⇒ 90° ⇒ max throttle, horizontal ⇒ 0°).
+        if (!g_config.tricopter_is_blimp) {
+            const float synth_tilt_deg = ((AP_Motors6DOF*)motors)->get_tilt_deg();
+            plane.TECS_controller.set_synthetic_pitch(radians(90.0f - synth_tilt_deg));
+        }
+
         // We must calculate throttle percent manually since we are running before servos_output
         float throttle_pct = SRV_Channels::get_output_scaled(SRV_Channel::k_throttle);
         // [AV-INVAR:min-thr-tilt] — see Avatar_Design.md § 9
@@ -2005,7 +2015,14 @@ void QuadPlane::update(void)
             plane_inputs.pitch_tilt_demand = constrain_float(
                 plane.nav_pitch_cd / (plane.aparm.pitch_limit_max * 100.0f), -1.0f, 1.0f);
             plane_inputs.tilt_rate_mode    = false;
-            plane_inputs.use_pid_yaw       = false;
+            // [AV-INVAR:stabilize-yaw-pid] — PID yaw in all nav plane modes (CRUISE, AUTO, ...),
+            // matching flight-validated STABILIZE behaviour. Manual-family modes are excluded:
+            // they never run the rate-target block in update(), so inputs.yaw would be stale,
+            // and raw rudder passthrough is the correct semantic for them anyway.
+            const bool manual_like = (plane.control_mode == &plane.mode_manual ||
+                                      plane.control_mode == &plane.mode_acro ||
+                                      plane.control_mode == &plane.mode_training);
+            plane_inputs.use_pid_yaw       = !manual_like;
         }
         ((AP_Motors6DOF*)motors)->set_plane_inputs(plane_inputs);
     }
@@ -2120,7 +2137,12 @@ void QuadPlane::update(void)
                 attitude_control->rate_bf_roll_target(roll_rate_cds);
 
                 // [AV-INVAR:stabilize-yaw-pid] — see Avatar_Design.md § 9
-                if (plane.control_mode == &plane.mode_stabilize) {
+                // Applies to ALL plane modes in this branch (STABILIZE, CRUISE, AUTO, ...):
+                // the copter yaw rate PID cancels disturbance yaw (front-motor thrust
+                // imbalance) that open-loop rudder cannot. In banked nav-mode turns the
+                // stick-centered I-reset below limits the PID to P/D damping — the same
+                // behaviour already flight-validated in STABILIZE forward flight.
+                {
                     const float pilot_yaw_cds = get_pilot_input_yaw_rate_cds();
                     // [AV-INVAR:passive-weathervane] — I-term reset lets aerodynamic weathervaning work
                     if (g_config.custom_weathervane && is_zero(pilot_yaw_cds)) {
