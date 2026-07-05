@@ -1848,6 +1848,17 @@ void QuadPlane::update(void)
             const Matrix3f &rot_body_to_ned = AP::ahrs().get_rotation_body_to_ned();
             const Vector3f vel_bf = rot_body_to_ned.mul_transpose(vel_ned);
             av_vel_bf_x = vel_bf.x;
+
+            // [AV-INVAR:vel-damp] — STABILIZE-entry snapshot: the hold target is
+            // stale from the previous STABILIZE session (e.g. 0 m/s hover) and,
+            // entering from CRUISE at speed, the resulting error (capped ±1.5 m/s)
+            // would tug the tilt backward the moment the dampener engages. Snapshot
+            // current velocity on the first active frame so re-entry starts from
+            // zero error, exactly like a stick-release snapshot.
+            if (_vel_damp_entry_snap_pending) {
+                _vel_hold_target = vel_bf.x;
+                _vel_damp_entry_snap_pending = false;
+            }
             const float pitch_stick = plane.channel_pitch->norm_input_dz();
             const bool pitch_active_vd = fabsf(pitch_stick) > 0.05f;
             const bool throttle_active = _throttle_active_s > 0.0f;
@@ -1896,6 +1907,7 @@ void QuadPlane::update(void)
     } else {
         _last_throttle_active = false;
         _last_stick_active = false;
+        _vel_damp_entry_snap_pending = true;   // [AV-INVAR:vel-damp] re-arm entry snapshot
     }
 #endif
 
@@ -1905,6 +1917,14 @@ void QuadPlane::update(void)
         AP_Motors6DOF::PlaneInputs plane_inputs;
         plane_inputs.pitch_cd = plane.nav_pitch_cd;
         plane_inputs.roll_cd = plane.nav_roll_cd;
+
+        // [AV-INVAR:mode-transition-blend] — see Avatar_Design.md § 9
+        // The mixer edge-detects flight-mode changes (all modes, Q and plane) and
+        // blends the commanded trim thrust vector across the switch. Q_TRANSITION_MS
+        // is repurposed as the blend duration (safe: Avatar never runs the stock
+        // transition state machine — [AV-INVAR:transition-skip]).
+        plane_inputs.control_mode_id = (uint8_t)plane.control_mode->mode_number();
+        plane_inputs.transition_blend_s = constrain_float(transition_time_ms * 0.001f, 0.1f, 5.0f);
 
         // [AV-INVAR:tecs-synth-pitch] — see Avatar_Design.md § 9
         // Feed TECS the thrust-vector angle as its "measured pitch" for the

@@ -785,6 +785,8 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 **Sign convention:** positive `pitch_tilt_demand` = toward vertical = decreases `state.pilot_tilt_deg` (0° = vertical, 90° = horizontal). This matches the sign convention of `[AV-INVAR:tilt-follows-nav-pitch]`.
 
+**`pilot_tilt_deg` sync — BOTH other branches keep it pinned to the physical tilt** (added July 2026): the copter branch and the plane *position* branch (CRUISE/AUTO/FBWA) each set `state.pilot_tilt_deg = state.current_tilt_deg` every frame. Rate mode therefore always starts from the current position on entry into STABILIZE, from any mode. Before the position-branch sync existed, CRUISE→STABILIZE slewed toward a stale `pilot_tilt_deg` (typically near-vertical from the last Q-mode session) at `Q_TILT_RATE_UP` = 225°/s — rotors slammed vertical at cruise speed. Covered by `position_mode_syncs_pilot_tilt_for_rate_mode_entry` in Group P of `tests/mixer_test`. A companion fix snapshots `_vel_hold_target` on STABILIZE entry (`_vel_damp_entry_snap_pending`, quadplane.cpp/h) so the vel-damp never acts on a stale hold target either — see `[AV-INVAR:vel-damp]`.
+
 **Unified slew (critical):** The `tilt_rate_mode` branch computes a single combined tilt target each frame and issues ONE rate-limited slew of `state.current_tilt_deg` toward it:
 - No dampening active: target = `state.pilot_tilt_deg` → classic rate-control behaviour.
 - Dampening active (`[AV-INVAR:sink-damp]`, `[AV-INVAR:long-damp]`, or `[AV-INVAR:vel-damp]`): target = `new_tilt_deg` from the force-vector decomposition, which is `pilot_tilt_deg` modified by the damping demand.
@@ -896,6 +898,32 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 **Do not use `outputs.tilt_angle` as the input to `cosf()` in copter mode.** `outputs.tilt_angle` is the target; `state.current_tilt_deg` is the physical position model. Using the target defeats the mechanism entirely.
 
 **Contrast with plane mode tilt rate limiting** (`[AV-INVAR:plane-tilt-slew]`): that invariant rate-limits the servo command itself to give the aircraft time to build airspeed during the hover→cruise transition. This invariant does the opposite — sends the full target to the servo immediately, while protecting motor mixing for the duration of the physical travel.
+
+**Interaction with `[AV-INVAR:mode-transition-blend]`:** during a mode-transition blend window the servo command follows the blended force vector instead of the raw TVC target, and the tracking model follows the blended command. The blend moves the command far slower than the servo's physical rate, so the model/servo error stays small and the cos(error) throttle compensation naturally stays ≈ 1 for the duration.
+
+---
+
+### [AV-INVAR:mode-transition-blend]
+
+**What:** On any **in-flight** flight-mode change (Q↔Q, plane↔Q, plane↔plane — the mixer edge-detects `control_mode_id`, supplied every loop from `plane.control_mode->mode_number()`), the previous frame's commanded **trim thrust vector** `(F_horiz, F_vert)` is frozen as a snapshot, and the output trim blends from snapshot to the new mode's live command over `Q_TRANSITION_MS` (golden config: **1500 ms**; mixer default 1.5 s if unset). Both branches record their final commanded trim vector every frame (post-dampeners), so the snapshot automatically includes whatever the dampeners were contributing at the switch instant.
+
+**Where:** `AP_Motors6DOF_AvatarMixer.cpp` — `apply_mode_transition_blend()` helper + edge-detection block at top of `mix()`; applied in the copter branch (servo command, tracking-model target, throttle) and the plane branch (throttle magnitude only — see below). Plumbing: `PlaneInputs::control_mode_id` / `transition_blend_s` set in `ArduPlane/quadplane.cpp`. Tests: Group P in `tests/mixer_test/test_main.cpp`.
+
+**Why:** Two distinct purposes. (1) *Command-source discontinuity* — plane↔copter switches swap which architecture computes the motor commands; the copter TVC would command its (typically near-vertical) target to the servo **instantly** on entry, the abrupt motor tilt observed at STABILIZE→QSTABILIZE. (2) *Pilot grace window* — Q→Q switches reinterpret the throttle stick (direct % ↔ climb rate about mid); the blend gives the pilot ~1.5 s to re-center before the stale stick meaning takes full effect. The blend does NOT fix stick semantics — after the window the stick means what the new mode says it means; centering the throttle at the switch remains pilot procedure.
+
+**Blend in force space, never actuator space:** the midpoint of two (tilt, throttle) pairs is not the midpoint of their net forces. Interpolate `(F_h, F_v)`, recompose via `atan2`/magnitude with the damp-block saturation rule (preserve vertical, clamp horizontal — defensive only: a convex combination of two ≤1 vectors cannot exceed 1).
+
+**Stabilisation is never blended.** Roll/pitch/yaw PID deltas, rear-motor pitch mixing, and yaw differential are applied live around the blended trim at full authority throughout the window. Only the trim point transitions. (Copter-branch snapshot records collective only, excluding `inputs.pitch`, for the same reason.)
+
+**Plane branch applies magnitude only:** plane-mode tilt continuity is already owned by the slew machinery (`[AV-INVAR:plane-tilt-slew]`, rate mode, and the copter-branch `pilot_tilt_deg` sync), so the snapshot direction ≈ live direction there and the vector blend reduces to a throttle handoff; writing the blended angle back would fight the slew's bookkeeping. This supersedes and replaces the old 0.5 s throttle-only `copter_to_plane_blend`.
+
+**Anti-windup:** while the blend suppresses the live vertical demand, the mixer asserts `limit.throttle_upper/lower` so upstream closed-loop controllers (`AC_PosControl` Z) freeze their integrators instead of winding against thrust they are not getting — otherwise the wound-up I discharges as a surge when the blend expires.
+
+**Ground safety:** mode tracking resets whenever spool ≠ `THROTTLE_UNLIMITED`; arming sequences and ground mode churn can never start a blend from a stale or zero snapshot.
+
+**`Q_TRANSITION_MS` repurposing is safe for Avatar only** because Avatar never runs the stock transition state machine (`[AV-INVAR:transition-skip]` — `force_transition_complete()`). The blimp still calls `transition->update()`, which consumes the stock meaning — which is fine, because the blend lives in `AvatarMixer` and never executes for the blimp. Do not move the blend into shared code without resolving that parameter collision.
+
+**Known accepted behavior:** failsafe-initiated mode changes (RC loss → QLAND/QRTL) also blend, softening the trim handoff by up to 1.5 s. Accepted deliberately: stabilisation stays live, and a smooth trim handoff arguably helps a failsafe entry.
 
 ---
 

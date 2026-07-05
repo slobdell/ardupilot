@@ -633,6 +633,10 @@ private:
     float _throttle_active_s = 0.0f;
     bool _last_throttle_active = false;
     bool _last_stick_active = false;
+    // [AV-INVAR:vel-damp] — true whenever the vel-damp block is inactive (not in
+    // STABILIZE / not flying); the first active frame snapshots _vel_hold_target
+    // from current velocity so mode entry never acts on a stale hold target.
+    bool _vel_damp_entry_snap_pending = true;
 #endif
 
     AP_Float takeoff_failure_scalar;

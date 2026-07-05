@@ -65,6 +65,8 @@ struct MixerInputs {
         bool  use_pid_yaw;         // [AV-INVAR:stabilize-yaw-pid] true = use inputs.yaw (copter PID); false = use rudder_input (raw stick)
         float damp_vert_thrust;    // [AV-INVAR:sink-damp] vertical thrust addition (0..1 scale); mixer decomposes into tilt-back + throttle boost
         float damp_horiz_thrust;   // [AV-INVAR:long-damp] horizontal thrust addition (-1..1 scale); mixer decomposes into tilt-fwd/back + throttle
+        uint8_t control_mode_id;   // [AV-INVAR:mode-transition-blend] flight-controller mode number, all modes (Q and plane); edge-detected by the mixer
+        float transition_blend_s;  // [AV-INVAR:mode-transition-blend] blend duration in seconds (from Q_TRANSITION_MS); <=0 falls back to 1.5 s
     } plane;
 
     // System Perception
@@ -114,8 +116,18 @@ struct MixerOutputs {
 struct MixerState {
     float current_tilt_deg;
     float pilot_tilt_deg;       // pilot's commanded tilt — only moved by stick, never by dampening
-    float last_copter_throttle; // last wing-motor base throttle from copter mode — used to blend at copter→plane transition
-    float copter_to_plane_blend;// 0 = use last_copter_throttle, 1 = fully on plane throttle (ramps up over 0.5 s)
+
+    // [AV-INVAR:mode-transition-blend] — see Avatar_Design.md § 9
+    // Both branches record their final commanded trim thrust vector every frame.
+    // On a flight-mode edge the previous frame's vector is frozen as the snapshot
+    // and the output blends from it to the live command over transition_blend_s.
+    float last_thrust_horiz;    // final commanded trim vector, recorded every mixing frame
+    float last_thrust_vert;
+    float snap_thrust_horiz;    // trim vector frozen at the last mode-change edge
+    float snap_thrust_vert;
+    float mode_blend;           // 0 = fully snapshot, 1 = fully live (blend inactive)
+    uint8_t last_mode_id;       // control-mode id seen last frame; 255 = none (no blend possible)
+
     bool manual_override_active;
     bool pitch_saturated;
     bool roll_saturated;
@@ -131,8 +143,12 @@ struct MixerState {
     MixerState() :
         current_tilt_deg(0.0f),
         pilot_tilt_deg(0.0f),
-        last_copter_throttle(0.5f),
-        copter_to_plane_blend(1.0f),
+        last_thrust_horiz(0.0f),
+        last_thrust_vert(0.0f),
+        snap_thrust_horiz(0.0f),
+        snap_thrust_vert(0.0f),
+        mode_blend(1.0f),
+        last_mode_id(255),
         manual_override_active(false),
         pitch_saturated(false),
         roll_saturated(false),

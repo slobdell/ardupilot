@@ -25,6 +25,50 @@ namespace AP_Motors6DOF_Mixer {
 
 const float AVATAR_MANUAL_YAW_DEADBAND = 0.05f;
 
+// [AV-INVAR:mode-transition-blend] — sentinel meaning "no previous mode seen":
+// blending is impossible until one full frame in a mode has been recorded.
+static const uint8_t AVATAR_MODE_ID_NONE = 255;
+
+// [AV-INVAR:mode-transition-blend] — see Avatar_Design.md § 9
+// Blend the branch's live commanded trim vector with the snapshot frozen at the
+// last flight-mode edge. Interpolation is done in FORCE SPACE (horizontal,
+// vertical thrust components), never on tilt/throttle independently — the
+// midpoint of two (tilt, throttle) pairs is not the midpoint of their net
+// forces. Recompose uses the same saturation rule as the dampening block:
+// preserve vertical lift, give horizontal the remaining headroom.
+// Stabilisation terms (roll/pitch/yaw deltas, rear mixing) are NEVER blended —
+// they are applied by the caller around the blended trim and stay live.
+static void apply_mode_transition_blend(MixerState& state,
+                                        float live_tilt_deg, float live_throttle,
+                                        float& out_tilt_deg, float& out_throttle,
+                                        MixerOutputs& outputs)
+{
+    const float b = state.mode_blend;   // 0 = all snapshot, 1 = all live
+    const float fh_live = live_throttle * sinf(radians(live_tilt_deg));
+    const float fv_live = live_throttle * cosf(radians(live_tilt_deg));
+    const float fh = state.snap_thrust_horiz * (1.0f - b) + fh_live * b;
+    const float fv = state.snap_thrust_vert  * (1.0f - b) + fv_live * b;
+    const float mag = sqrtf(fh * fh + fv * fv);
+    if (mag > 1.0f) {
+        const float vc = constrain_float(fv, 0.0f, 1.0f);
+        const float hr = sqrtf(fmaxf(0.0f, 1.0f - vc * vc));
+        out_tilt_deg = degrees(atan2f(copysignf(hr, fh), vc));
+        out_throttle = 1.0f;
+    } else {
+        out_tilt_deg = degrees(atan2f(fh, fv));
+        out_throttle = mag;
+    }
+    out_tilt_deg = constrain_float(out_tilt_deg,
+        g_config.reverse_flight_physical_angle_deg,
+        g_config.forward_flight_physical_angle_deg);
+    // Anti-windup: while the blend suppresses the live vertical demand, assert the
+    // throttle limit flags so upstream closed-loop controllers (AC_PosControl Z)
+    // freeze their integrators instead of winding against thrust they are not
+    // getting — otherwise the wound-up I discharges as a surge when the blend ends.
+    if (fv < fv_live - 0.01f) { outputs.limit.throttle_upper = true; }
+    if (fv > fv_live + 0.01f) { outputs.limit.throttle_lower = true; }
+}
+
 // Maximum forward/lateral input observed from the radio at full stick deflection.
 // ArduPlane's Q_ANGLE_MAX (currently 30 deg) caps the pitch demand fed into the
 // 6DOF attitude controller, so set_forward never reaches 1.0 even at full stick.
@@ -56,6 +100,29 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
 
     bool in_plane_mode = (inputs.plane.transition_progress > 0.5f);
 
+    // [AV-INVAR:mode-transition-blend] — flight-mode edge detection & blend clock.
+    // Only in-flight (THROTTLE_UNLIMITED) mode changes start a blend: while on the
+    // ground / spooling, mode tracking is reset so arming or ground mode churn can
+    // never blend from a stale or zero snapshot.
+    if (inputs.spool_state != AP_Motors::SpoolState::THROTTLE_UNLIMITED) {
+        state.last_mode_id = AVATAR_MODE_ID_NONE;
+        state.mode_blend = 1.0f;
+    } else {
+        if (state.last_mode_id != AVATAR_MODE_ID_NONE &&
+            inputs.plane.control_mode_id != state.last_mode_id) {
+            // Mode changed in flight: freeze last frame's trim vector as the snapshot.
+            state.snap_thrust_horiz = state.last_thrust_horiz;
+            state.snap_thrust_vert  = state.last_thrust_vert;
+            state.mode_blend = 0.0f;
+        }
+        state.last_mode_id = inputs.plane.control_mode_id;
+        if (state.mode_blend < 1.0f) {
+            const float blend_s = (inputs.plane.transition_blend_s > 0.01f)
+                                  ? inputs.plane.transition_blend_s : 1.5f;
+            state.mode_blend = fminf(1.0f, state.mode_blend + inputs.dt / blend_s);
+        }
+    }
+
     if (in_plane_mode) {
         // =====================================================================
         // --- STATE B: PLANE MODE ---
@@ -66,13 +133,18 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
 
         float throttle_pct = inputs.plane.throttle_pct * 0.01f;
 
-        // Copter→plane throttle blend: ramp from the last copter-mode wing-motor throttle
-        // to the plane throttle over 0.5 s so the pilot experiences a smooth handoff rather
-        // than a step change. copter_to_plane_blend is reset to 0 each frame in copter mode.
-        if (state.copter_to_plane_blend < 1.0f) {
-            state.copter_to_plane_blend = fminf(1.0f, state.copter_to_plane_blend + inputs.dt / 0.5f);
-            throttle_pct = state.last_copter_throttle * (1.0f - state.copter_to_plane_blend)
-                         + throttle_pct              *  state.copter_to_plane_blend;
+        // [AV-INVAR:mode-transition-blend] — supersedes the old 0.5 s copter→plane
+        // throttle-only blend. Tilt continuity in plane mode is owned by the slew
+        // machinery ([AV-INVAR:plane-tilt-slew] / rate mode), so the snapshot
+        // direction ≈ the live direction here and the vector blend reduces to a
+        // throttle-magnitude handoff; the blended tilt angle is intentionally not
+        // written back (it would fight the slew's bookkeeping).
+        if (state.mode_blend < 1.0f) {
+            float blended_tilt_deg, blended_throttle;
+            apply_mode_transition_blend(state, state.current_tilt_deg, throttle_pct,
+                                        blended_tilt_deg, blended_throttle, outputs);
+            throttle_pct = blended_throttle;
+            (void)blended_tilt_deg;
         }
 
         {
@@ -151,6 +223,13 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
                 state.current_tilt_deg = constrain_float(target_tilt_deg,
                     state.current_tilt_deg - (rate_up * inputs.dt),   // toward vertical: fast
                     state.current_tilt_deg + (rate_dn * inputs.dt));  // toward horizontal: slow
+                // [AV-INVAR:stabilize-tilt-rate-control] — mirror of the copter-branch
+                // sync: keep pilot intent pinned to the physical tilt so a switch into
+                // STABILIZE rate mode starts from the current position. Without this,
+                // CRUISE/AUTO→STABILIZE slews toward a stale pilot_tilt_deg (typically
+                // ~vertical from the last Q-mode session) at Q_TILT_RATE_UP — the fast
+                // direction — slamming the rotors vertical at cruise speed.
+                state.pilot_tilt_deg = state.current_tilt_deg;
             }
             outputs.tilt_angle = state.current_tilt_deg >= 0.0f
                 ? state.current_tilt_deg / g_config.forward_flight_physical_angle_deg
@@ -200,6 +279,12 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         outputs.limit.yaw = (fabsf(yaw_demand) > yaw_room + 1e-4f);
         outputs.motor_thrust[AVATAR_MOT_YAW_LEFT]  = rear_common + yaw_delta_b;
         outputs.motor_thrust[AVATAR_MOT_YAW_RIGHT] = rear_common - yaw_delta_b;
+
+        // [AV-INVAR:mode-transition-blend] — record this frame's final commanded trim
+        // vector (throttle_pct is post-dampeners and post-blend, so the snapshot taken
+        // at a future mode edge includes everything the dampeners were contributing).
+        state.last_thrust_horiz = throttle_pct * sinf(radians(state.current_tilt_deg));
+        state.last_thrust_vert  = throttle_pct * cosf(radians(state.current_tilt_deg));
 
 #if AVATAR_DEBUG_LOG
         {
@@ -268,6 +353,32 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         float throttle_thrust = tvc_out.total_throttle;
         outputs.debug_data = tvc_out.debug_data;
 
+        // [AV-INVAR:mode-transition-blend] — on plane→copter entry the TVC would
+        // command its target (typically near-vertical) to the servo INSTANTLY
+        // ([AV-INVAR:tilt-servo-tracking] sends the full target immediately), which
+        // is the abrupt motor tilt observed at STABILIZE→QSTABILIZE. During the
+        // blend window the servo command, the tracking-model target, and the
+        // throttle all follow the blended force vector instead. The blend moves the
+        // command far slower than the servo's physical rate, so the tracking-model
+        // error stays small and the cos(error) compensation below naturally stays ≈1.
+        // The cruise_norm cap is intentionally bypassed while blending: a plane-mode
+        // snapshot may sit past 90° (descent trim); clamping it would reintroduce a
+        // step at entry. The blend itself walks the angle below 90° within the window.
+        float tvc_target_deg = tvc_out.debug_data.target_pitch_deg;
+        if (state.mode_blend < 1.0f) {
+            const float live_target_deg = constrain_float(tvc_target_deg,
+                g_config.reverse_flight_physical_angle_deg,
+                g_config.forward_flight_physical_angle_deg);
+            float blended_deg, blended_throttle;
+            apply_mode_transition_blend(state, live_target_deg, throttle_thrust,
+                                        blended_deg, blended_throttle, outputs);
+            tvc_target_deg  = blended_deg;
+            throttle_thrust = blended_throttle;
+            outputs.tilt_angle = blended_deg >= 0.0f
+                ? blended_deg / g_config.forward_flight_physical_angle_deg
+                : blended_deg / fmaxf(fabsf(g_config.reverse_flight_physical_angle_deg), 0.1f);
+        }
+
         // [AV-INVAR:tilt-servo-tracking] — see Avatar_Design.md § 9
         // outputs.tilt_angle (servo command) is already set to the TVC target above.
         // state.current_tilt_deg is a rate-limited model of where the servo physically is.
@@ -281,7 +392,9 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // derives its servo command from state.current_tilt_deg, so it would command slightly past
         // horizontal — a small forward jerk. Fix if it matters: cap target_deg at
         // g_config.cruise_physical_angle_deg before the constrain below.
-        float target_deg = tvc_out.debug_data.target_pitch_deg;
+        // During a mode-transition blend, target_deg is the blended command instead
+        // so the tracking model follows the servo. [AV-INVAR:mode-transition-blend]
+        float target_deg = tvc_target_deg;
         state.current_tilt_deg = constrain_float(target_deg,
             state.current_tilt_deg - (tilt_rate * inputs.dt),
             state.current_tilt_deg + (tilt_rate * inputs.dt));
@@ -326,10 +439,11 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // i.e. the receiving pair also ran out of downward headroom.
         outputs.limit.pitch = (base_thrust < 0.0f) || (rear_thrust < 0.0f);
         base_thrust = constrain_float(base_thrust, 0.0f, 1.0f);
-        // Track effective wing-motor throttle for smooth copter→plane handoff.
-        // Reset blend to 0 each frame so the first plane-mode frame starts the ramp.
-        state.last_copter_throttle = base_thrust;
-        state.copter_to_plane_blend = 0.0f;
+        // [AV-INVAR:mode-transition-blend] — record this frame's final commanded trim
+        // vector (collective only: the inputs.pitch stabilisation delta is deliberately
+        // excluded — stabilisation is never blended, only the trim point).
+        state.last_thrust_horiz = throttle_thrust * sinf(radians(state.current_tilt_deg));
+        state.last_thrust_vert  = throttle_thrust * cosf(radians(state.current_tilt_deg));
         float desired_roll = inputs.roll * roll_effectiveness;
         // De-saturate by shifting both motors equally so the roll differential is
         // preserved even when throttle has pushed base_thrust to 1.0. Sacrifices

@@ -2257,6 +2257,224 @@ void blimp_manual_override_rc3_sets_yaw_motor_and_rudder()
 }
 
 // ============================================================================
+// GROUP P — Mode-transition force-vector blend [AV-INVAR:mode-transition-blend]
+//
+// On any in-flight flight-mode change the mixer freezes the previous frame's
+// commanded trim thrust vector and blends from it to the new mode's command
+// over transition_blend_s, in force space. Stabilisation terms are never
+// blended. Blending requires spool == THROTTLE_UNLIMITED and a previously
+// recorded mode (ground mode churn can never trigger it).
+//
+// NOTE: the saturation branch of the recompose (|F| > 1) is defensive only —
+// a convex combination of two vectors of magnitude <= 1 cannot exceed 1, so
+// no test drives it.
+//
+// Mode ids used below are arbitrary but match production values for clarity:
+//   17 = QSTABILIZE, 19 = QLOITER, 2 = STABILIZE.
+// ============================================================================
+
+static MixerInputs copter_inputs_mode(uint8_t mode_id)
+{
+    MixerInputs in = neutral_copter_inputs();
+    in.plane.control_mode_id   = mode_id;
+    in.plane.transition_blend_s = 1.5f;
+    return in;
+}
+
+static MixerInputs stabilize_inputs_mode(uint8_t mode_id)
+{
+    MixerInputs in = neutral_stabilize_inputs();
+    in.tilt_rate_up_dps = 1e6f;              // tilt not under test here
+    in.plane.control_mode_id   = mode_id;
+    in.plane.transition_blend_s = 1.5f;
+    return in;
+}
+
+void blend_q_to_q_mode_change_blends_throttle_step()
+{
+    // Hover in mode 17 at throttle 0.5, then switch to mode 19 with upstream now
+    // commanding full throttle (1.0). First frame after the edge must still be
+    // ~0.5 (snapshot); after the full window it must be ~1.0 (live).
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerState   state;
+    MixerOutputs out;
+    MixerInputs  in17 = copter_inputs_mode(17);
+    for (int i = 0; i < 5; i++) mixer.mix(in17, state, out);
+    CHECK_NEAR(0.5f, out.motor_thrust[0], 0.02f);   // established hover
+
+    MixerInputs in19 = copter_inputs_mode(19);
+    in19.throttle = 1.0f;                            // upstream steps to full
+    mixer.mix(in19, state, out);
+    CHECK_NEAR(0.5f, out.motor_thrust[0], 0.02f);   // first frame ≈ snapshot
+    CHECK_TRUE(out.limit.throttle_upper);            // anti-windup while suppressing up
+
+    for (int i = 0; i < 700; i++) mixer.mix(in19, state, out);  // > 1.5 s at 400 Hz
+    CHECK_NEAR(1.0f, out.motor_thrust[0], 0.02f);   // converged to live
+    CHECK_FALSE(out.limit.throttle_upper);           // no longer suppressing
+    end_test();
+}
+
+void blend_same_mode_throttle_step_is_not_blended()
+{
+    // Identical to the previous test but WITHOUT a mode change: the step must
+    // pass through immediately. Proves the blend keys on mode edges only.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerState   state;
+    MixerOutputs out;
+    MixerInputs  in17 = copter_inputs_mode(17);
+    for (int i = 0; i < 5; i++) mixer.mix(in17, state, out);
+    in17.throttle = 1.0f;
+    mixer.mix(in17, state, out);
+    CHECK_NEAR(1.0f, out.motor_thrust[0], 0.02f);
+    end_test();
+}
+
+void blend_plane_to_copter_carries_tilt_and_throttle()
+{
+    // STABILIZE at 50° tilt, 70% throttle → switch to QSTABILIZE (TVC wants
+    // vertical @ 0.5). Without the blend the servo would be commanded vertical
+    // instantly ([AV-INVAR:tilt-servo-tracking] sends the target immediately).
+    // With it, the first copter frame must stay near the plane trim vector,
+    // and after the window it must be at the TVC hover command.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerState   state = state_at_tilt(50.0f);
+    MixerOutputs out;
+    MixerInputs  inp = stabilize_inputs_mode(2);
+    inp.plane.throttle_pct = 70.0f;
+    for (int i = 0; i < 5; i++) mixer.mix(inp, state, out);
+    CHECK_NEAR(50.0f, state.current_tilt_deg, 0.5f);  // rate mode holds tilt
+
+    MixerInputs inq = copter_inputs_mode(17);          // hover: target 0°, thr 0.5
+    mixer.mix(inq, state, out);
+    // First copter frame: servo command ≈ snapshot direction (50°/95° ≈ 0.526), not 0.
+    CHECK_NEAR(50.0f / FWD_DEG, out.tilt_angle, 0.03f);
+    CHECK_NEAR(0.7f, out.motor_thrust[0], 0.03f);      // and snapshot magnitude
+
+    for (int i = 0; i < 700; i++) mixer.mix(inq, state, out);
+    CHECK_NEAR(0.0f, out.tilt_angle, 0.02f);           // converged: vertical
+    CHECK_NEAR(0.5f, out.motor_thrust[0], 0.02f);      // converged: hover throttle
+    end_test();
+}
+
+void blend_copter_to_plane_replaces_old_throttle_blend()
+{
+    // QSTABILIZE hover (0.5) → STABILIZE with pilot throttle at 20%. First plane
+    // frame must output ≈ 0.5 (snapshot), converging to 0.2. This is the
+    // generalized replacement for the removed copter_to_plane_blend.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerState   state;
+    MixerOutputs out;
+    MixerInputs  inq = copter_inputs_mode(17);
+    for (int i = 0; i < 5; i++) mixer.mix(inq, state, out);
+
+    MixerInputs inp = stabilize_inputs_mode(2);
+    inp.plane.throttle_pct = 20.0f;
+    mixer.mix(inp, state, out);
+    CHECK_NEAR(0.5f, out.motor_thrust[0], 0.02f);   // first frame ≈ snapshot
+    CHECK_TRUE(out.limit.throttle_lower);            // suppressing a downward step
+
+    for (int i = 0; i < 700; i++) mixer.mix(inp, state, out);
+    CHECK_NEAR(0.2f, out.motor_thrust[0], 0.02f);   // converged to pilot throttle
+    end_test();
+}
+
+void blend_ground_mode_change_does_not_blend()
+{
+    // Mode changes while not THROTTLE_UNLIMITED must never arm the blend: after
+    // spool-up in the new mode, output is live immediately.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerState   state;
+    MixerOutputs out;
+    MixerInputs  in17 = copter_inputs_mode(17);
+    in17.spool_state = AP_Motors::SpoolState::GROUND_IDLE;
+    for (int i = 0; i < 5; i++) mixer.mix(in17, state, out);
+
+    MixerInputs in19 = copter_inputs_mode(19);       // mode changed on the ground
+    in19.throttle = 1.0f;                            // spooled up, full command
+    mixer.mix(in19, state, out);
+    CHECK_NEAR(1.0f, out.motor_thrust[0], 0.02f);   // live immediately, no blend
+    end_test();
+}
+
+void blend_duration_follows_transition_blend_s()
+{
+    // With transition_blend_s = 0.25, convergence completes within ~0.3 s of
+    // frames rather than 1.5 s.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerState   state;
+    MixerOutputs out;
+    MixerInputs  in17 = copter_inputs_mode(17);
+    in17.plane.transition_blend_s = 0.25f;
+    for (int i = 0; i < 5; i++) mixer.mix(in17, state, out);
+
+    MixerInputs in19 = copter_inputs_mode(19);
+    in19.plane.transition_blend_s = 0.25f;
+    in19.throttle = 1.0f;
+    for (int i = 0; i < 130; i++) mixer.mix(in19, state, out);  // 0.325 s
+    CHECK_NEAR(1.0f, out.motor_thrust[0], 0.02f);
+    end_test();
+}
+
+void blend_stabilisation_terms_stay_live_during_blend()
+{
+    // Roll PID output must act at full authority DURING the blend — stabilisation
+    // is never blended, only the trim vector. At near-vertical tilt mid-blend,
+    // roll differential ≈ inputs.roll on top of the blended base.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerState   state;
+    MixerOutputs out;
+    MixerInputs  in17 = copter_inputs_mode(17);
+    for (int i = 0; i < 5; i++) mixer.mix(in17, state, out);
+
+    MixerInputs in19 = copter_inputs_mode(19);
+    in19.roll = 0.2f;                                // live stabilisation demand
+    mixer.mix(in19, state, out);
+    // Differential = left − right = 2 × roll × cos(tilt≈0°) = 0.4, undiminished
+    // by the blend (which only owns the common mode).
+    CHECK_NEAR(0.4f, out.motor_thrust[0] - out.motor_thrust[1], 0.02f);
+    end_test();
+}
+
+void position_mode_syncs_pilot_tilt_for_rate_mode_entry()
+{
+    // BLOCKER 2 (RESEARCH.md § 4): pilot_tilt_deg was synced to the physical tilt
+    // only by the copter branch. Flying a position-mode plane mode (CRUISE/AUTO)
+    // to wings-horizontal and then switching to STABILIZE (rate mode) made the
+    // rate branch slew toward the stale pilot_tilt_deg (≈0°, vertical) at
+    // Q_TILT_RATE_UP — the fast direction — at cruise speed.
+    //
+    // Fix: position branch mirrors the copter-branch sync every frame.
+    // Entry into rate mode with neutral stick must HOLD the current tilt.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerState   state;                       // pilot_tilt_deg starts 0 (stale/vertical)
+    MixerOutputs out;
+
+    // Fly CRUISE-like position mode to wings-horizontal (neutral demand → 90°).
+    MixerInputs inc = stabilize_inputs_mode(7);
+    inc.plane.tilt_rate_mode = false;         // position mode (CRUISE/AUTO)
+    for (int i = 0; i < 5; i++) mixer.mix(inc, state, out);
+    CHECK_NEAR(CRUISE_DEG, state.current_tilt_deg, 0.5f);
+    CHECK_NEAR(CRUISE_DEG, state.pilot_tilt_deg,  0.5f);   // the fix: synced
+
+    // Switch to STABILIZE rate mode, neutral stick, finite (fast) servo rate.
+    MixerInputs ins = stabilize_inputs_mode(2);
+    ins.tilt_rate_up_dps = 225.0f;            // production Q_TILT_RATE_UP
+    for (int i = 0; i < 200; i++) mixer.mix(ins, state, out);  // 0.5 s
+    // Without the fix: tilt would have slewed 0.5 s × 225°/s → all the way vertical.
+    // With it: neutral stick holds position.
+    CHECK_NEAR(CRUISE_DEG, state.current_tilt_deg, 1.0f);
+    end_test();
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -2380,6 +2598,16 @@ int main()
     copter_unsaturated_pitch_transfer_is_noop();
     copter_low_throttle_rear_railed_at_zero_does_not_boost_fronts();
     copter_yaw_room_respects_post_transfer_rear_common_mode();
+
+    std::printf("\n-- Group P: Mode-transition blend [AV-INVAR:mode-transition-blend] --\n");
+    blend_q_to_q_mode_change_blends_throttle_step();
+    blend_same_mode_throttle_step_is_not_blended();
+    blend_plane_to_copter_carries_tilt_and_throttle();
+    blend_copter_to_plane_replaces_old_throttle_blend();
+    blend_ground_mode_change_does_not_blend();
+    blend_duration_follows_transition_blend_s();
+    blend_stabilisation_terms_stay_live_during_blend();
+    position_mode_syncs_pilot_tilt_for_rate_mode_entry();
 
     std::printf("\n-- Layer 4: BlimpMixer plane mode --\n");
     blimp_plane_neutral_stick_gives_full_forward_tilt();

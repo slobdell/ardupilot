@@ -56,6 +56,8 @@ public:
         bool  use_pid_yaw = false;  // [AV-INVAR:stabilize-yaw-pid] true = use inputs.yaw (copter PID); false = use rudder_input (raw stick)
         float damp_vert_thrust  = 0.0f; // [AV-INVAR:sink-damp] vertical thrust addition (0..1 scale); mixer decomposes into tilt-back + throttle boost
         float damp_horiz_thrust = 0.0f; // [AV-INVAR:long-damp] horizontal thrust addition (-1..1 scale); mixer decomposes into tilt-fwd/back + throttle
+        uint8_t control_mode_id = 0;    // [AV-INVAR:mode-transition-blend] flight-controller mode number (all modes); mixer edge-detects changes
+        float transition_blend_s = 0.0f;// [AV-INVAR:mode-transition-blend] blend duration seconds (Q_TRANSITION_MS/1000); <=0 = mixer default 1.5 s
     };
     
     // Inject Plane state for hybrid control
