@@ -2164,11 +2164,37 @@ void QuadPlane::update(void)
                 // behaviour already flight-validated in STABILIZE forward flight.
                 {
                     const float pilot_yaw_cds = get_pilot_input_yaw_rate_cds();
-                    // [AV-INVAR:passive-weathervane] — I-term reset lets aerodynamic weathervaning work
+                    // [AV-INVAR:passive-weathervane] — I-term reset lets aerodynamic weathervaning
+                    // work. Gate on the PILOT stick only: the coordination feedforward below is not a
+                    // stick command, and it is ~0 in hover (bank ~0) so it never fights weathervaning.
                     if (g_config.custom_weathervane && is_zero(pilot_yaw_cds)) {
                         attitude_control->get_rate_yaw_pid().reset_I();
                     }
-                    attitude_control->rate_bf_yaw_target(pilot_yaw_cds);
+                    // [AV-INVAR:coordinated-turn-ff] — kinematic turn-coordination feedforward.
+                    // A constant-altitude banked turn needs body yaw rate g*tan(bank)/V; add it to the
+                    // pilot's yaw as another desired-rate command. The SAME copter yaw PID and mixer
+                    // execute the sum — the mixer already fades the rear-motor share out with tilt while
+                    // the V-tail surface carries it in cruise, so no per-actuator scaling is needed here.
+                    // This is a pure feedforward, NOT the stock AP_YawController sideslip/rate feedback
+                    // loop (that loop, closed through the motors, was the original instability).
+                    // Bank is ACTUAL roll (works in STABILIZE, where nav_roll_cd is not the bank source).
+                    // V is the live body-frame FORWARD speed (same signal the Q_DAMP_VEL damper reads),
+                    // floored at airspeed_min so the 1/V term can't blow up when banked at low speed —
+                    // below the floor this errs toward UNDER-coordination (safe), never a yaw runaway.
+                    // No airspeed sensor, so V is inertial ground speed: in steady wind it diverges from
+                    // true airspeed, which is tolerable for a feedforward. Falls back to the assumed
+                    // AIRSPEED_CRUISE constant if the EKF velocity estimate is momentarily unavailable.
+                    const float bank_rad = constrain_float(ahrs.get_roll(), -1.3962634f, 1.3962634f);
+                    float coord_speed;
+                    Vector3f vel_ned_coord;
+                    if (ahrs.get_velocity_NED(vel_ned_coord)) {
+                        const Vector3f vel_bf = ahrs.get_rotation_body_to_ned().mul_transpose(vel_ned_coord);
+                        coord_speed = MAX(vel_bf.x, MAX((float)plane.aparm.airspeed_min, 1.0f));
+                    } else {
+                        coord_speed = MAX((float)plane.aparm.airspeed_cruise, 1.0f);
+                    }
+                    const float coord_yaw_cds = degrees(GRAVITY_MSS * tanf(bank_rad) / coord_speed) * 100.0f;
+                    attitude_control->rate_bf_yaw_target(pilot_yaw_cds + coord_yaw_cds);
                 }
 
                 attitude_control->set_throttle_out(get_pilot_throttle(), false, 0);

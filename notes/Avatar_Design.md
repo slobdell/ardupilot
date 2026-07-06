@@ -816,7 +816,7 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 **What:** In all nav plane modes (STABILIZE, CRUISE, AUTO, RTL, …), the pilot's rudder stick is converted to a yaw rate demand (via `get_pilot_input_yaw_rate_cds()`, which applies expo and `Q_YAW_RATE_MAX` scaling) and written to the copter attitude controller via `rate_bf_yaw_target()`. The mixer plane branch then uses `inputs.yaw` (the PID output) for motor differential and rudder surface — identical to the copter mode path. Manual-family modes (MANUAL/ACRO/TRAINING) are excluded (`use_pid_yaw = false`): they never run the rate-target block, so the PID output would be stale, and raw rudder passthrough is their correct semantic.
 
-*Scope history:* originally STABILIZE-only; extended to all nav plane modes July 2026 so CRUISE climbs (rotors near vertical, rudder aerodynamically dead) get the same disturbance-yaw cancellation — front-wing-motor thrust imbalance yaw (log 00000072.BIN mechanism) is otherwise uncorrected outside STABILIZE. The theoretical cost — the PID damping coordinated-turn yaw rates in banked forward flight — was already present on the rudder surface in validated STABILIZE forward flight and proved benign (acts as a yaw damper); the stick-centered I-reset (`[AV-INVAR:passive-weathervane]`) keeps it P/D-only in hands-off nav turns. If CRUISE logs ever show L1 tracking degraded by skidding turns, the fix is a coordinated-turn feedforward on the yaw rate target (`g·tan(roll)/ground_speed`), not a revert.
+*Scope history:* originally STABILIZE-only; extended to all nav plane modes July 2026 so CRUISE climbs (rotors near vertical, rudder aerodynamically dead) get the same disturbance-yaw cancellation — front-wing-motor thrust imbalance yaw (log 00000072.BIN mechanism) is otherwise uncorrected outside STABILIZE. The theoretical cost — the PID damping coordinated-turn yaw rates in banked forward flight — was already present on the rudder surface in validated STABILIZE forward flight and proved benign (acts as a yaw damper); the stick-centered I-reset (`[AV-INVAR:passive-weathervane]`) keeps it P/D-only in hands-off nav turns. The residual skidding-turn cost this note anticipated is now addressed by a coordinated-turn feedforward added to the yaw rate target (`g·tan(bank)/V`) — see `[AV-INVAR:coordinated-turn-ff]`. The PID described here still runs underneath that feedforward as the disturbance-yaw damper; the feedforward is not a revert of it.
 
 **Where:** Two locations:
 1. `ArduPlane/quadplane.cpp` — Avatar FBWA block, after `rate_bf_roll_target()`.
@@ -825,6 +825,22 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 **Why:** The original plane branch used `rudder_input / 4500` (raw stick, open-loop). This gave noticeably weaker and inconsistent yaw authority compared to copter mode because there was no PID stabilization, no I-term heading hold when stick is centered, and no expo. Routing through `rate_bf_yaw_target()` gives STABILIZE the same `Q_A_RAT_YAW_*` PIDs as QSTABILIZE/QLOITER.
 
 **Do not revert to `rudder_input / 4500`** in the plane branch — that discards the PID and produces open-loop yaw with no heading hold.
+
+---
+
+### [AV-INVAR:coordinated-turn-ff]
+
+**What:** In all nav plane modes, a kinematic turn-coordination feedforward `g·tan(bank)/V` is summed with the pilot's yaw rate before the target is written: `rate_bf_yaw_target(pilot_yaw_cds + coord_yaw_cds)`. It is a *desired yaw rate* — architecturally no different from the pilot deflecting the rudder stick — so the single copter yaw PID (`[AV-INVAR:stabilize-yaw-pid]`) and the existing mixer actuator split (`[AV-INVAR:yaw-handoff-cos-tilt]`) execute it unchanged. There is **no second (surface) PID** and no per-actuator scaling at the injection point.
+
+**Where:** `ArduPlane/quadplane.cpp` — Avatar FBWA block, immediately before the yaw `rate_bf_yaw_target()` call, inside the `[AV-INVAR:stabilize-yaw-pid]` block.
+
+**Why a pure feedforward, not the stock coordinator:** `AP_YawController::get_servo_out()` is *not* a feedforward — it is a lateral-acceleration (sideslip) + yaw-rate **feedback** loop whose output is scaled by dynamic pressure (`scaler²` ∝ V²); the `g·tan(bank)/V` term appears there only as an internal reference subtracted from the measured rate. That loop is correct driving a *rudder surface* (authority also ∝ V²) but was destabilizing when the old plane-yaw path also drove the *motors* (full authority regardless of airspeed, so effective loop gain was wildly mismatched and the sideslip integrator wound up against thrust). We take only the kinematic FF and let the flight-validated copter PID close the loop. **Do not reintroduce `AP_YawController`/sideslip feedback onto the motor path.**
+
+**Bank source is ACTUAL roll (`ahrs.get_roll()`), not `nav_roll_cd`** — `nav_roll_cd` is not the bank source in STABILIZE (`[AV-INVAR:stabilize-roll-from-stick]`), so it would be stale there; actual roll is the source the old `AP_YawController` used and works across every plane mode. Bank is constrained to ±80° to bound `tan()`. Sign: right bank (+roll) → +yaw rate (nose-right), which coordinates a right turn.
+
+**V is live body-frame forward speed (`vel_bf.x`), floored at `airspeed_min`** — the same signal `[AV-INVAR:vel-damp]` reads. The floor prevents the `1/V` term from blowing up when banked at low speed; below the floor the error direction is *under*-coordination (safe), never a yaw runaway. With no airspeed sensor this is inertial ground speed, so it diverges from true airspeed in steady wind — tolerable for a feedforward. Falls back to the assumed `AIRSPEED_CRUISE` (`[AV-INVAR:airspeed-cruise-gain]`) only if the EKF velocity estimate is momentarily unavailable. **Note `AIRSPEED_MIN = 0` on the current airframe** collapses the floor to the hard 1.0 m/s guard — raising `AIRSPEED_MIN` to a real value would improve low-speed behaviour.
+
+**Weathervane interaction:** the I-reset gate (`[AV-INVAR:passive-weathervane]`) keys on the **pilot stick only**, not on `pilot_yaw_cds + coord_yaw_cds`. The coordination term is ~0 in hover (bank ≈ 0), so it never fights weathervaning; the two are disjoint regimes (weathervane owns hover, coordination owns cruise).
 
 ---
 

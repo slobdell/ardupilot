@@ -1,5 +1,5 @@
 # Avatar Zoh Altus VTOL — Handoff
-**Date:** June 2026  
+**Date:** 2026-07-06  
 **FC:** MicoAir H743 (`AHRS_ORIENTATION=6`)  
 **Branch:** `slobdell_base`  
 **Golden params:** `params/avatar_t1ranger_micoair.param` (source of truth)
@@ -220,7 +220,7 @@ Full invariant: `Avatar_Design.md § 9 [AV-INVAR:vel-damp]`
 ## Outstanding Items
 
 1. **Check rear (yaw) ESC Motor KV setting** — NEW, high priority. The front ESCs were found defaulted to `Motor KV=2220` instead of the real 900, silently capping thrust (see Hardware Config above). The rear ESCs have never been confirmed. If they have the same unset default, it may fully or partially explain the June "yaw physical authority limit" finding — check this *before* pursuing the cant-angle hardware fix below.
-2. **Weathervaning investigation** — see next section
+2. **Coordinated-turn yaw investigation** — see NEXT TASK below (the earlier weathervaning investigation was resolved: passive weathervaning via yaw-PID I-reset, `[AV-INVAR:passive-weathervane]`)
 3. **Yaw hardware fix** — cant rear motors out 2–5° to recover yaw authority (only pursue if #1 doesn't resolve it)
 4. **Motor heat** — fundamental thrust-to-weight issue; re-check now that front motors/props have changed
 5. **Re-verify yaw PID** — tuned against the old front-motor thrust profile; front motor retune (July 5) may have shifted coupling behavior enough to warrant a yaw pass too
@@ -228,36 +228,90 @@ Full invariant: `Avatar_Design.md § 9 [AV-INVAR:vel-damp]`
 
 ---
 
-## NEXT TASK: Weathervaning Investigation
+## NEXT TASK: Coordinated-Turn Yaw — INVESTIGATION (not a prescription)
 
-### Problem statement
-In STABILIZE (Avatar plane mode) and QSTABILIZE, there is no effective weathervaning — the aircraft does not align its nose to the wind. The pilot reported this; `Q_WVANE_GAIN=1.0` is set but appears inactive.
+> This is an open investigation. The goal is to understand whether coordinated turns can be
+> (partly) restored **without** a second PID, and to weigh the options — **not** to jump to an
+> implementation. Confirm the gap in logs first.
 
-### Why it's not working — code analysis
+### The question
+In nav plane modes (STABILIZE, CRUISE, AUTO) the yaw rate target is **purely the pilot's yaw
+stick** — there is no turn coordination. When a bank is commanded (pilot roll stick, or L1/nav via
+`nav_roll_cd`) with the rudder stick centered, the commanded yaw rate is **0**, so the aircraft is
+told *not* to yaw through the turn — an uncoordinated (flat/skidding) turn, corrected only by
+whatever passive aero the V-tail happens to provide. Do we have to totally sacrifice coordinated
+turns, or can we mix a coordination term into the existing yaw?
 
-**Built-in ArduPilot weathervaning** (`QuadPlane::get_weathervane_yaw_rate_cds`, `quadplane.cpp:4175`):
-- First guard: `!in_vtol_mode()` — returns `false` in STABILIZE (plane mode), so the function immediately returns 0
-- Explicitly also excluded from QSTABILIZE (`plane.control_mode == &plane.mode_qstabilize`, line 4184) and QHOVER
-- So `Q_WVANE_GAIN` is set but the function never executes in the modes we fly
+### Why it's like this today (the constraint that shaped it)
+- Yaw target is set in `quadplane.cpp ~2159-2172`: `pilot_yaw_cds = get_pilot_input_yaw_rate_cds()`
+  → `rate_bf_yaw_target(pilot_yaw_cds)`. There is **no** `g·tan(bank)/V` coordination term.
+- The single validated yaw PID (`Q_A_RAT_YAW_*`, see "Yaw PID" section above) was tuned for the
+  **motor mixer** — the rear-motor differential-thrust yaw — in hover/QLOITER. It is **not** a
+  surface-rudder tune. We avoided a coordination contribution to keep that one PID valid and to
+  avoid maintaining a second (surface) PID. That constraint still holds.
 
-**Custom weathervaning** (`g_config.custom_weathervane`, `ArduCopter/mode_loiter.cpp`):
-- This is feature-flagged custom code in the **ArduCopter binary** only
-- Uses `attitude_control->input_thrust_vector_heading()` instead of `input_thrust_vector_rate_heading()` — targets a compass heading rather than a yaw rate
-- Does NOT exist in the ArduPlane binary that Avatar runs
+### The architectural hinge to exploit
+In the mixer plane branch (`AP_Motors6DOF_AvatarMixer.cpp ~368-385`) the **same** `yaw_norm`
+(= `inputs.yaw` in nav modes) drives BOTH:
+- the **rear-motor differential** (`yaw_delta_b = yaw_norm · cos_tilt_b`) — **fades OUT with tilt**
+  (full in hover, ~0 in cruise), and
+- the **surface rudder** (`rudder_out = yaw_norm` → V-tail) — aero authority **fades IN with
+  airspeed** (~0 in hover, full in cruise).
 
-### Investigation steps for next agent
-1. **Confirm via logs**: Plot `ATT.Yaw` and `ATT.DesYaw` during a windy hover — if they both drift with wind (no heading correction), weathervaning is confirmed absent
-2. **Read the AC_WeatherVane library**: `libraries/AC_AttitudeControl/AC_WeatherVane.h/.cpp` — understand what inputs it needs and what it outputs
-3. **Decide architecture**: Should weathervaning in STABILIZE use:
-   - The existing `AC_WeatherVane` controller (add a call in the STABILIZE yaw path)?
-   - A simpler custom implementation (e.g., feed wind-direction error into the yaw PID)?
-4. **Compare built-in vs custom**: The custom `input_thrust_vector_heading()` approach (ArduCopter LOITER) is more tightly integrated with the attitude controller than the rate-addition approach. Understand the tradeoff before choosing.
+So the two yaw actuators have **opposite schedules**, and **coordinated turns only matter in forward
+flight** — exactly where the rear motor is faded off and the **V-tail surface** carries the yaw. A
+coordination term can therefore live on the *surface* path in cruise **without touching the
+motor-yaw PID that owns hover**. And coordination is fundamentally a **feedforward**
+(`yaw_rate = g·tan(bank)/V`), not a feedback loop — so it may need **no PID at all**. This is very
+likely the crux the pilot is pointing at ("mix with other input, keep one PID").
+
+### Building blocks that already exist
+- `QuadPlane::desired_auto_yaw_rate_cds()` — **`quadplane.cpp:1511`** — the exact coordinated-turn
+  yaw rate `g·tan(nav_roll)/aspeed` (already used for VTOL assistance). Reusable as a feedforward.
+- ArduPlane stock `AP_YawController` (turn coordination + sideslip suppression for the rudder
+  surface) — currently **unused** by the Avatar yaw path.
+
+### Avenues to weigh (evaluate; do not assume one)
+1. **FF into the copter yaw rate target:** `rate_bf_yaw_target(pilot_yaw_cds + coord_yaw_rate)`.
+   Simplest; drives both actuators via the existing PID's FF/P. Downside: it also feeds the *motor*
+   PID (may be unwanted in the transition band) and it needs an assumed airspeed.
+2. **FF on the surface path only:** add a bank-angle coordination term to `rudder_out`/V-tail,
+   scaled in by `(1 − cos_tilt)` or airspeed, leaving the rear-motor yaw PID untouched. Keeps hover
+   identical, adds aero coordination in cruise, needs no second PID. **Most aligned with the
+   constraint.**
+3. **Use `AP_YawController` for the surface rudder in cruise,** blended by tilt/airspeed, with motor
+   yaw staying on the copter PID.
+
+### Constraints & considerations
+- **No airspeed sensor, ever** (decided — memory `[[fbw-modes-analysis]]` #11). `g·tan(bank)/V`
+  needs an *assumed* V — use `AIRSPEED_CRUISE` the way TECS already does (it's a gain knob, not a
+  measurement). Wrong V → over/under-coordination, but feedforward errors are tolerable.
+- **Weathervane interaction:** the passive-weathervane I-reset (`quadplane.cpp ~2167`) suppresses
+  yaw when the stick is centered. A coordination FF is not a stick command — decide whether it should
+  count as "commanded yaw" for that gate. Probably fine (weathervaning matters in hover, coordination
+  in cruise — disjoint regimes), but check.
+- **Level-fuselage design:** the Avatar banks to turn (`nav_roll_cd`) while holding the fuselage
+  level; verify the coordination sign/scale against that geometry.
+- **Scope to forward flight** (nav modes, low `cos_tilt`) so hover yaw — the flight-validated
+  regime — stays untouched.
+
+### First concrete step
+Confirm the gap in a log before changing anything: in a CRUISE/STABILIZE banked turn with no rudder
+input, plot the actual yaw rate (`ATT` yaw / `IMU` gyro-z) vs `nav_roll_cd` and the coordinated ideal
+`g·tan(nav_roll)/AIRSPEED_CRUISE`. Quantify how far from coordinated the current turns actually are —
+it may be small enough not to matter, or large enough to justify avenue 2.
 
 ### Key files
-- `ArduPlane/quadplane.cpp:4175` — `get_weathervane_yaw_rate_cds()` (built-in, gated out)
-- `ArduCopter/mode_loiter.cpp:106` — custom weathervane flag usage
-- `ArduPlane/quadplane.cpp:1415` — `get_desired_yaw_rate_cds()` (where weathervane yaw is added in VTOL modes)
-- `libraries/AC_AttitudeControl/AC_WeatherVane.h` — the controller itself
+- `libraries/AP_Motors/AP_Motors6DOF_AvatarMixer.cpp:368-385` — plane yaw split (motor differential
+  `yaw_delta_b` + surface `rudder_out`), both from `yaw_norm`
+- `ArduPlane/quadplane.cpp:2159-2172` — Avatar yaw rate target (`pilot_yaw_cds`, weathervane I-reset)
+- `ArduPlane/quadplane.cpp:1511` — `desired_auto_yaw_rate_cds()` coordinated-turn formula (reusable)
+- `ArduPlane/quadplane.cpp:2013, 2025-2045` — `rudder_input` / `use_pid_yaw` (manual-vs-nav yaw source)
+- Invariants (`Avatar_Design.md § 9`): `[AV-INVAR:stabilize-yaw-pid]`, `[AV-INVAR:yaw-handoff-cos-tilt]`,
+  `[AV-INVAR:passive-weathervane]`
+- Context: `notes/cruise_considerations.md` (CRUISE / L1 turns / crab), `notes/Avatar_Pitch_Control.md`
+  (design patterns: scheduling vs projection, feedforward-not-PID, body/earth frame); memory
+  `[[fbw-modes-analysis]]`, `[[project-avatar]]`
 
 ---
 
