@@ -553,6 +553,246 @@ void copter_yaw_room_respects_post_transfer_rear_common_mode()
 }
 
 // ============================================================================
+// GROUP R — PLANE-mode pitch couple [AV-INVAR:plane-pitch-couple]
+//
+// The front (wing) pair carries +inputs.pitch UNSCALED; the rear pair carries
+// −inputs.pitch·cos_tilt. At wings-vertical (cos_tilt = 1) the two match, so a
+// pitch demand produces a balanced couple: front and rear split by 2·pitch. The
+// [AV-INVAR:pitch-before-throttle] cross-pair transfer preserves that couple when
+// one pair rails. These tests validate recovery from pitch-up AND pitch-down, in
+// both unsaturated and saturated motor cases. Motor map: [0]/[1] = front wings,
+// [2]/[3] = rear pair.
+// ============================================================================
+
+void plane_pitch_up_unsaturated_forms_balanced_couple()
+{
+    // Wings vertical (cos_tilt = 1), hover throttle 0.5, nose-up demand pitch = +0.3.
+    //   front = 0.5 + 0.3 = 0.8,  rear = (0.5 - 0.3)·1 = 0.2
+    // Couple = front − rear = 0.6 = 2·pitch. Nothing rails; limit.pitch stays false.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 1.0f;   // wings vertical
+    in.plane.throttle_pct      = 50.0f;
+    in.pitch                   = 0.3f;
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(0.8f, out.motor_thrust[0], 0.001f); // front left
+    CHECK_NEAR(0.8f, out.motor_thrust[1], 0.001f); // front right
+    CHECK_NEAR(0.2f, out.motor_thrust[2], 0.001f); // rear
+    CHECK_NEAR(0.2f, out.motor_thrust[3], 0.001f);
+    CHECK_FALSE(out.limit.pitch);
+    end_test();
+}
+
+void plane_pitch_down_unsaturated_forms_balanced_couple()
+{
+    // Mirror: nose-down demand pitch = −0.3, wings vertical, hover throttle.
+    //   front = 0.5 − 0.3 = 0.2,  rear = (0.5 + 0.3)·1 = 0.8
+    // The front drops and the rear rises — a pure nose-down moment.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 1.0f;
+    in.plane.throttle_pct      = 50.0f;
+    in.pitch                   = -0.3f;
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(0.2f, out.motor_thrust[0], 0.001f);
+    CHECK_NEAR(0.2f, out.motor_thrust[1], 0.001f);
+    CHECK_NEAR(0.8f, out.motor_thrust[2], 0.001f);
+    CHECK_NEAR(0.8f, out.motor_thrust[3], 0.001f);
+    CHECK_FALSE(out.limit.pitch);
+    end_test();
+}
+
+// This is the exact log-00000093 departure geometry: near-hover, high throttle,
+// nose-up runaway → PID demands nose-DOWN, but the rear (which pushes the nose down
+// by ADDING thrust) is already near the rail. Before the couple, nose-down authority
+// was exhausted and the aircraft departed. Now the FRONT pair delivers it.
+void plane_pitch_down_rear_railed_delivered_by_front()
+{
+    // Wings vertical, high throttle 0.9, strong nose-down demand pitch = −0.3.
+    //   rear raw  = (0.9 + 0.3)·1 = 1.2 → rails at 1.0, excess 0.3 transferred
+    //   front     = 0.9 − 0.3 − 0.3 = 0.3
+    // Couple = rear − front = 0.7... no: the transfer moves the rear's undeliverable
+    //   excess (0.2 over the rail) onto the front: front = 0.9 − 0.3 − 0.2 = 0.4,
+    //   rear clamps to 1.0. Couple (rear − front) = 0.6 = 2·pitch — fully preserved.
+    // limit.pitch must NOT fire: the moment was delivered through the front pair.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 1.0f;
+    in.plane.throttle_pct      = 90.0f;
+    in.pitch                   = -0.3f;
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(0.4f, out.motor_thrust[0], 0.001f); // fronts drop to make the moment
+    CHECK_NEAR(0.4f, out.motor_thrust[1], 0.001f);
+    CHECK_NEAR(1.0f, out.motor_thrust[2], 0.001f); // rears railed
+    CHECK_NEAR(1.0f, out.motor_thrust[3], 0.001f);
+    CHECK_NEAR(0.6f, (out.motor_thrust[2] + out.motor_thrust[3]) * 0.5f
+                     - (out.motor_thrust[0] + out.motor_thrust[1]) * 0.5f, 0.001f);
+    CHECK_FALSE(out.limit.pitch);                  // couple fully delivered
+    end_test();
+}
+
+void plane_pitch_up_front_railed_delivered_by_rear()
+{
+    // Mirror: wings vertical, high throttle 0.9, strong nose-up demand pitch = +0.3.
+    //   front raw = 0.9 + 0.3 = 1.2 → rails at 1.0, excess 0.2 transferred
+    //   rear      = (0.9 − 0.3)·1 − 0.2 = 0.6 − 0.2 = 0.4
+    // Couple (front − rear) = 0.6 = 2·pitch preserved; limit.pitch stays false.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 1.0f;
+    in.plane.throttle_pct      = 90.0f;
+    in.pitch                   = 0.3f;
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(1.0f, out.motor_thrust[0], 0.001f);
+    CHECK_NEAR(1.0f, out.motor_thrust[1], 0.001f);
+    CHECK_NEAR(0.4f, out.motor_thrust[2], 0.001f);
+    CHECK_NEAR(0.4f, out.motor_thrust[3], 0.001f);
+    CHECK_FALSE(out.limit.pitch);
+    end_test();
+}
+
+void plane_pitch_couple_unsaturated_transfer_is_noop()
+{
+    // Moderate pitch at hover throttle: nothing rails, so the transfer is inert and
+    // the front pair simply carries +pitch, the rear −pitch. Confirms tuned normal
+    // flight is unchanged (the transfer only activates on saturation).
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 1.0f;
+    in.plane.throttle_pct      = 50.0f;
+    in.pitch                   = 0.2f;
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(0.7f, out.motor_thrust[0], 0.001f); // 0.5 + 0.2
+    CHECK_NEAR(0.3f, out.motor_thrust[2], 0.001f); // 0.5 - 0.2
+    CHECK_FALSE(out.limit.pitch);
+    end_test();
+}
+
+void plane_pitch_couple_front_scales_as_cos_squared_at_45deg()
+{
+    // Option A: the front pitch term is gated by cos_tilt (fmaxf(0,cos)), so it fades to
+    // zero at horizontal and cannot invert past it. Consequence: the front's VERTICAL
+    // pitch authority is pitch·cos²θ (gate × projection), vs the rear's pitch·cosθ — a
+    // deliberate, small imbalance (negligible near hover; checked here at 45°).
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    const float cos45 = std::cos(45.0f * (float)(M_PI / 180.0));
+
+    MixerInputs  in0 = neutral_plane_inputs();
+    in0.plane.pitch_tilt_demand = 0.5f;  // 45°
+    in0.plane.throttle_pct      = 50.0f;
+    in0.pitch                   = 0.0f;
+    MixerState   s0; MixerOutputs o0;
+    mixer.mix(in0, s0, o0);
+
+    MixerInputs  inp = in0;
+    inp.pitch = 0.2f;
+    MixerState   sp; MixerOutputs op;
+    mixer.mix(inp, sp, op);
+
+    // Front COMMAND delta is gated: 0.2·cos45. Its vertical projection is 0.2·cos²45.
+    float front_cmd_delta  = op.motor_thrust[0] - o0.motor_thrust[0];
+    float front_vert_delta = front_cmd_delta * cos45;
+    // Rear is ~vertical, so its command delta IS its vertical delta (rear falls for
+    // nose-up, hence o0 − op).
+    float rear_vert_delta  = o0.motor_thrust[2] - op.motor_thrust[2];
+    CHECK_NEAR(0.2f * cos45,         front_cmd_delta,  0.001f); // gated command
+    CHECK_NEAR(0.2f * cos45 * cos45, front_vert_delta, 0.001f); // cos² vertical authority
+    CHECK_NEAR(0.2f * cos45,         rear_vert_delta,  0.001f); // rear stays cos
+    CHECK_TRUE(front_vert_delta < rear_vert_delta);             // front fades faster (accepted)
+    end_test();
+}
+
+void plane_pitch_couple_gated_off_past_horizontal_no_inversion()
+{
+    // Servo past horizontal (95°, reachable via full pitch-down — the config's
+    // forward_flight_physical_angle_deg = 95°, § 4.4.3 descent). cos(95°) < 0 → floored
+    // to 0, so the front pitch term must be ZERO here — NOT added (an airspeed kick with
+    // no pitch) and NOT inverted (adding thrust to a down-pointing motor pitches the nose
+    // the WRONG way). Pitch is handed to the elevator; the front carries throttle only.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = -1.0f;  // full pitch-down → tilt slews to 95°
+    in.plane.throttle_pct      = 50.0f;
+    in.pitch                   = 0.5f;   // strong nose-up demand
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_TRUE(state.current_tilt_deg > 90.0f);    // actually past horizontal
+    CHECK_NEAR(0.5f, out.motor_thrust[0], 0.001f); // front = throttle only (no pitch, no invert)
+    CHECK_NEAR(0.5f, out.motor_thrust[1], 0.001f);
+    CHECK_NEAR(0.0f, out.motor_thrust[2], 0.001f); // rear gated to zero
+    CHECK_NEAR(0.5f, out.elevator_out,    0.001f); // elevator carries the pitch demand
+    end_test();
+}
+
+void plane_pitch_down_front_railed_at_zero_truncates_and_flags()
+{
+    // Lift-reducing only: at low throttle a big nose-down demand rails the FRONT at 0.
+    // The undelivered pitch must NOT be boosted onto the rear (no motor spin-up), and
+    // limit.pitch MUST fire so the copter pitch I-term stops winding.
+    //   front raw = 0.1 − 0.5 = −0.4 → railed at 0, not transferred
+    //   rear      = (0.1 + 0.5)·1 = 0.6   (unchanged)
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 1.0f;
+    in.plane.throttle_pct      = 10.0f;
+    in.pitch                   = -0.5f;
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(0.0f, out.motor_thrust[0], 0.001f);
+    CHECK_NEAR(0.0f, out.motor_thrust[1], 0.001f);
+    CHECK_NEAR(0.6f, out.motor_thrust[2], 0.001f);
+    CHECK_NEAR(0.6f, out.motor_thrust[3], 0.001f);
+    CHECK_TRUE(out.limit.pitch);                  // pitch genuinely undelivered
+    end_test();
+}
+
+void plane_pitch_priority_over_yaw_after_transfer()
+{
+    // Full hierarchy: pitch > yaw > throttle, in plane mode. Nose-up demand rails the
+    // front and shrinks the rear common mode to 0.4 via the transfer; a full yaw demand
+    // then gets only the symmetric headroom around 0.4 — it cannot steal pitch.
+    //   front = 1.0 (railed),  rear_common = 0.4,  yaw_room = min(0.4,0.6) = 0.4
+    //   YAW_LEFT[3] = 0.4 + 0.4 = 0.8,  YAW_RIGHT[2] = 0.4 − 0.4 = 0.0
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 1.0f;
+    in.plane.use_pid_yaw       = true;
+    in.plane.throttle_pct      = 90.0f;
+    in.pitch                   = 0.3f;
+    in.yaw                     = 1.0f;
+    MixerState   state;
+    MixerOutputs out;
+    mixer.mix(in, state, out);
+    CHECK_NEAR(1.0f, out.motor_thrust[0], 0.001f); // front railed (pitch preserved)
+    CHECK_NEAR(0.8f, out.motor_thrust[3], 0.001f); // YAW_LEFT
+    CHECK_NEAR(0.0f, out.motor_thrust[2], 0.001f); // YAW_RIGHT
+    CHECK_NEAR(0.4f, (out.motor_thrust[2] + out.motor_thrust[3]) * 0.5f, 0.001f);
+    CHECK_TRUE(out.limit.yaw);
+    end_test();
+}
+
+// ============================================================================
 // LAYER 3: AvatarMixer — COPTER MODE (TVC brain drives tilt)
 // ============================================================================
 
@@ -2692,6 +2932,17 @@ int main()
     copter_unsaturated_pitch_transfer_is_noop();
     copter_low_throttle_rear_railed_at_zero_does_not_boost_fronts();
     copter_yaw_room_respects_post_transfer_rear_common_mode();
+
+    std::printf("\n-- Group R: Plane-mode pitch couple [AV-INVAR:plane-pitch-couple] --\n");
+    plane_pitch_up_unsaturated_forms_balanced_couple();
+    plane_pitch_down_unsaturated_forms_balanced_couple();
+    plane_pitch_down_rear_railed_delivered_by_front();
+    plane_pitch_up_front_railed_delivered_by_rear();
+    plane_pitch_couple_unsaturated_transfer_is_noop();
+    plane_pitch_couple_front_scales_as_cos_squared_at_45deg();
+    plane_pitch_couple_gated_off_past_horizontal_no_inversion();
+    plane_pitch_down_front_railed_at_zero_truncates_and_flags();
+    plane_pitch_priority_over_yaw_after_transfer();
 
     std::printf("\n-- Group P: Mode-transition blend [AV-INVAR:mode-transition-blend] --\n");
     blend_q_to_q_mode_change_blends_throttle_step();

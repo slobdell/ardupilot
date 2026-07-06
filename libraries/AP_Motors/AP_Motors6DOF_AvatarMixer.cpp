@@ -263,23 +263,77 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // [AV-INVAR:elevator-follows-pitch-pid] — see Avatar_Design.md § 9
         outputs.elevator_out = inputs.pitch;
 
-        // cos(tilt): 1 at wings-vertical (hover), 0 at wings-horizontal (cruise).
-        // Scales both motor roll differential and rear motor — authority fades as
-        // aerodynamic surfaces (ailerons, elevator) take over through the transition.
+        // cos(tilt): 1 at wings-vertical (hover), 0 at wings-horizontal (cruise). Scales the
+        // roll differential, the yaw differential, and — via the wing motor's own tilt
+        // projecting its thrust onto the vertical axis — the pitch couple below. All fade as
+        // the aerodynamic surfaces (ailerons, elevator) take over through the transition.
         float cos_tilt_b = fmaxf(0.0f, cosf(radians(state.current_tilt_deg)));
-        // Roll: copter attitude controller differential, same input and tuning as copter mode.
-        // Fades to zero at wings-horizontal where aileron authority is full.
+
+        // --- Pitch couple: front (wing) pair vs rear pair ------------------------------
+        // [AV-INVAR:plane-pitch-couple] — see Avatar_Design.md § 4.4.1 / § 9.
+        // Give the plane branch a real pitch actuator: the front pair carries +inputs.pitch
+        // and the rear pair carries −inputs.pitch, forming a couple (front-down + rear-up =
+        // a pure nose-down moment, and vice versa) at the pilot/dampener-set tilt — the servo
+        // is NOT touched. Before this, only the rear pair carried pitch; at high throttle the
+        // rear (which pushes the nose down by ADDING thrust) railed with no headroom left and
+        // the nose departed uncontrollably (log 00000093.BIN). The front pair supplies the
+        // missing half using its own magnitude range (it had ample downward room in that log).
+        //
+        // Both pitch terms are gated by cos_tilt_b = fmaxf(0, cos_tilt), and this gate is
+        // MANDATORY on the front, not cosmetic. A wing motor's vertical component is
+        // T·cos_tilt, which is zero at horizontal (90°) and NEGATIVE past it — the servo
+        // travels to forward_flight_physical_angle_deg = 95° on full pitch-down (§ 4.4.3
+        // descent). An ungated front term (throttle + inputs.pitch) would add pure forward
+        // thrust at 90° (an airspeed kick, no pitch) and INVERT past 90° (adding thrust when
+        // the motor points forward-and-down pushes the nose the WRONG way — positive feedback).
+        // Gating by fmaxf(0, cos_tilt) fades the front pitch contribution smoothly to zero by
+        // horizontal and holds it at zero past it, handing pitch to the elevator exactly where
+        // § 4.4.3 intends.
+        //
+        // Consequence (Option A, chosen): the front's VERTICAL pitch authority is
+        // inputs.pitch·cos²_tilt (gate × projection) while the rear's is inputs.pitch·cos_tilt,
+        // so the couple is not perfectly balanced — a pitch demand leaks ≤ ~0.25·pitch of net
+        // vertical force into altitude in mid-transition (peaks ~60°, absorbed by the sink
+        // dampener). Negligible near hover, where cos² ≈ cos — and near hover is the regime that
+        // departed in log 00000093.BIN, so the fix that matters is unaffected. The whole couple's
+        // plant gain becomes inputs.pitch·cos_tilt·(1+cos_tilt): a smooth monotonic fade from 2
+        // (both actuators, hover) to 0 (cruise), never negative, matched to the I-handoff
+        // (`[AV-INVAR:cos-tilt-i-zero]`). NEVER divide by cos_tilt to "rebalance" the couple —
+        // that restores balance but blows up at horizontal, which is the fade we actually want.
+        float front_common = throttle_pct + inputs.pitch * cos_tilt_b;
+        float rear_common  = (throttle_pct - inputs.pitch) * cos_tilt_b;
+
+        // [AV-INVAR:pitch-before-throttle] — cross-pair transfer (mirror of the copter branch).
+        // When one pair rails at 1.0 it cannot deliver the pitch demanded of it; take the
+        // undeliverable part out of the OTHER pair's common mode instead of truncating it. This
+        // spends common-mode lift (recoverable) to preserve pitch authority (a departure is not),
+        // and is the piece that makes the rear-railed log-00000093 case survivable — the front
+        // gives up its excess so the nose-down moment is still produced. Division-free and
+        // lift-reducing only: low-side clips (a pair railed at 0) are truncated, never boosted
+        // onto the other pair, so a wound-up PID can never spin motors up near the ground.
+        // No-op when unsaturated — tuned normal flight is bit-for-bit unchanged.
+        const float front_excess = fmaxf(0.0f, front_common - 1.0f);
+        rear_common -= front_excess * cos_tilt_b;
+        const float rear_excess = fmaxf(0.0f, rear_common - 1.0f);
+        front_common -= rear_excess;
+        // Anti-windup: pitch is undelivered only if the receiving pair also ran out of headroom.
+        outputs.limit.pitch = (front_common < 0.0f) || (rear_common < 0.0f);
+        front_common = constrain_float(front_common, 0.0f, 1.0f);
+        rear_common  = constrain_float(rear_common,  0.0f, 1.0f);
+
+        // Front (wing) pair: pitch common mode ± roll differential. Roll fades to zero at
+        // wings-horizontal where aileron authority is full; p_shift preserves the roll
+        // differential by sacrificing front common mode symmetrically when a wing would clip.
         float roll_delta  = inputs.roll * cos_tilt_b;
-        float p_left_raw  = throttle_pct + roll_delta;
-        float p_right_raw = throttle_pct - roll_delta;
+        float p_left_raw  = front_common + roll_delta;
+        float p_right_raw = front_common - roll_delta;
         float p_excess_high = fmaxf(0.0f, fmaxf(p_left_raw, p_right_raw) - 1.0f);
         float p_excess_low  = fmaxf(0.0f, -fminf(p_left_raw, p_right_raw));
         float p_shift = p_excess_high - p_excess_low;
         outputs.motor_thrust[AVATAR_MOT_WING_LEFT]  = constrain_float(p_left_raw  - p_shift, 0.0f, 1.0f);
         outputs.motor_thrust[AVATAR_MOT_WING_RIGHT] = constrain_float(p_right_raw - p_shift, 0.0f, 1.0f);
         outputs.aileron_out  = -inputs.plane.aileron_input / 4500.0f;
-        float rear_demand = (throttle_pct - inputs.pitch) * cos_tilt_b;
-        outputs.limit.pitch = (rear_demand > 1.0f || rear_demand < 0.0f);
+
         // Yaw: all nav plane modes (STABILIZE, CRUISE, AUTO, ...) use the copter attitude
         // PID (inputs.yaw); manual-family modes (MANUAL/ACRO/TRAINING) use raw rudder stick.
         // [AV-INVAR:stabilize-yaw-pid] and [AV-INVAR:yaw-handoff-cos-tilt] — see Avatar_Design.md § 9
@@ -287,14 +341,13 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
             ? inputs.yaw
             : (inputs.plane.rudder_input / 4500.0f);
         outputs.rudder_out = yaw_norm;
-        // [AV-INVAR:rear-pitch-priority] — the rear motors carry the pitch/throttle common
-        // mode AND the yaw differential on two shared actuators. Prioritize the common mode:
-        // it keeps the aircraft stable (pitch); yaw only holds heading. Clamp the common mode
-        // to [0,1], then give yaw only the symmetric headroom that remains, so a large yaw
-        // demand can never rail a rear motor and starve pitch authority. A leftover full yaw
-        // split did exactly that → STABILIZE nose-up departure (log 00000072.BIN). No-op in
-        // the unsaturated case (behaviour identical to before for tuned normal flight).
-        float rear_common = constrain_float(rear_demand, 0.0f, 1.0f);
+        // [AV-INVAR:rear-pitch-priority] — the rear pair carries the pitch/throttle common mode
+        // (rear_common, computed above with the cross-pair transfer already applied) AND the yaw
+        // differential on two shared actuators. Prioritize the common mode: it keeps the aircraft
+        // stable (pitch); yaw only holds heading. Give yaw only the symmetric headroom that
+        // remains around rear_common, so a large yaw demand can never rail a rear motor and
+        // starve pitch. A leftover full yaw split did exactly that → STABILIZE nose-up departure
+        // (log 00000072.BIN). No-op in the unsaturated case.
         float yaw_room    = fminf(rear_common, 1.0f - rear_common);
         float yaw_demand  = yaw_norm * cos_tilt_b;
         float yaw_delta_b = constrain_float(yaw_demand, -yaw_room, yaw_room);

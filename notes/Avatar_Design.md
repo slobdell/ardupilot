@@ -174,9 +174,11 @@ Driven by the copter roll PID targeting `nav_roll_cd` (same bank angle the FBWA 
 
 ### 4.4.1 Rear Motor Pitch Stabilisation During Tilt (Plane Mode)
 
+> **Update (log 00000093.BIN):** the rear-motor-only stabilisation described here proved insufficient — near hover at high throttle the rear pair rails and has no nose-down headroom left, and the nose departs. The plane branch now runs a full front-vs-rear pitch **couple** with cross-pair transfer, so the front pair supplies the missing authority. This section documents the original rear term (still present, and still the rear half of the couple); the couple itself is specified in `[AV-INVAR:plane-pitch-couple]` (§ 9).
+
 **The problem:** As the wing motors tilt from horizontal toward vertical, their thrust vector rotates. This rotation generates an uncontrolled pitch-up moment on the airframe. The elevator is already saturated at this point (that is what triggered the tilt in the first place), so it has no headroom left to resist this moment. Without active counteraction the aircraft will pitch up uncontrollably as the wings rotate.
 
-**The solution:** The rear motor provides a nose-down pitching moment proportional to the aircraft's pitch deviation from level:
+**The solution (original — now the rear half of the couple):** The rear motor provides a nose-down pitching moment proportional to the aircraft's pitch deviation from level:
 
 ```cpp
 float tilt_deg_b = outputs.tilt_angle * g_config.forward_flight_physical_angle_deg;
@@ -877,7 +879,25 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 **Bounded steal:** The transfer magnitude is bounded by `|inputs.pitch|`, which is bounded by the copter rate PID output limits — and it can only drive the receiving pair to 0, never negative. Worst case at full throttle is one pair at 1.0 and the other at 0 (maximum moment, half lift). No separate cap parameter is needed.
 
-**Plane branch deliberately not covered:** In plane mode the front motors carry no pitch term (throttle ± roll only) — pitch is rear motor + elevator. Extending pitch-before-throttle there would mean cross-pair stealing front throttle when the rears rail, a separate design decision with TECS interactions. Scoped as future work.
+**Plane branch now covered too:** The plane branch previously carried no front pitch term (pitch was rear motor + elevator only), which left the pitch loop with a single, one-directional actuator that railed and departed (log 00000093.BIN). The plane branch now runs the identical couple + cross-pair transfer — see `[AV-INVAR:plane-pitch-couple]` below. Covered by Group R tests in `tests/mixer_test`.
+
+---
+
+### [AV-INVAR:plane-pitch-couple]
+
+**What:** In the plane branch (STATE B — STABILIZE, CRUISE, AUTO, …), the front (wing) pair carries `+inputs.pitch × cos_tilt` and the rear pair carries `−inputs.pitch × cos_tilt` (both gated by `cos_tilt_b = fmaxf(0, cos_tilt)`), forming a pitch couple at the pilot/dampener-commanded tilt. The servo tilt angle is **not** touched — this is a thrust-magnitude differential only. The same `[AV-INVAR:pitch-before-throttle]` cross-pair transfer then runs on `front_common`/`rear_common`, and `[AV-INVAR:rear-pitch-priority]`'s `yaw_room` is taken around the post-transfer `rear_common`.
+
+**Where:** `AP_Motors6DOF_AvatarMixer.cpp`, plane branch, replacing the old `throttle ± roll` front block and the standalone `rear_demand`. No-op at `inputs.pitch = 0`, so all prior plane behaviour (and every existing plane test) is unchanged. Covered by Group R tests in `tests/mixer_test`.
+
+**Why:** Before this, plane-mode pitch had one actuator — the rear pair, `(throttle − pitch) × cos_tilt` — which produces a nose-down moment by *adding* thrust. Near hover at high throttle the rear baseline is already near 1.0, so nose-down authority is nearly exhausted; a nose-up disturbance (e.g. commanded tilt-forward per § 4.4.1) railed both rear motors while the pitch PID demanded −120°/s and the nose ran to 60°+ (log 00000093.BIN). The front pair supplies the missing half of the couple using *its own* magnitude range — in that log the fronts sat near 0.5 with full downward room. Copter mode (STATE C) never had this failure because it always ran the couple; this brings the plane branch to parity.
+
+**Why the front term is gated by `cos_tilt` (Option A):** Pitch moment is produced by the differential of the *vertical* thrust components. A wing motor's vertical component is `T × cos_tilt`, which goes to **zero at horizontal (90°)** and **negative past it** — the servo travels to `forward_flight_physical_angle_deg = 95°` on full pitch-down (§ 4.4.3 descent). If the front term were unscaled (`throttle + inputs.pitch`), then at 90° it would add pure forward thrust (an airspeed kick, no pitch) and **past 90° it would invert** — adding thrust to a forward-and-down-pointing motor pitches the nose the *wrong* way (positive feedback). Gating by `fmaxf(0, cos_tilt)` — the same guard the rear already uses — fades the front pitch contribution smoothly to zero by horizontal and holds it at zero past it, handing pitch to the elevator exactly where § 4.4.3 intends.
+
+**The accepted cost — a slightly unbalanced couple:** with the gate, the front's *vertical* pitch authority is `inputs.pitch × cos²_tilt` (gate × projection) while the rear's is `inputs.pitch × cos_tilt`. The couple is therefore not perfectly balanced: a pitch demand leaks up to ~`0.25 × pitch` of net vertical force into altitude in mid-transition (peaks ~60°, absorbed by the sink dampener). This is **negligible near hover** (`cos² ≈ cos`), which is the regime that departed in log 00000093.BIN, so the fix that matters is unaffected. The whole couple's plant gain is `inputs.pitch × cos_tilt × (1 + cos_tilt)`: a smooth, monotonic, always-non-negative fade from 2 (both actuators, hover) to 0 (cruise), so the front's contribution is scheduled in gracefully by tilt and matched to the I-handoff (`[AV-INVAR:cos-tilt-i-zero]`). **Never divide by `cos_tilt` to rebalance:** holding vertical authority constant would require `inputs.pitch / cos_tilt`, which blows up at horizontal — and the fade to the elevator is exactly what we want. The unbalanced-but-safe gate was chosen over an unscaled-but-inverting term and over a smoothstep gate (which would preserve balance in the bulk at the cost of a knee parameter). Verified in `plane_pitch_couple_front_scales_as_cos_squared_at_45deg` and `plane_pitch_couple_gated_off_past_horizontal_no_inversion`.
+
+**Servo stays locked for pitch (but the dampeners still move it):** The tilt servo is a single shared actuator and is rate-limited; it physically cannot produce a front-vs-rear differential, and a symmetric re-vector produces no pitch moment. Pitch is therefore an ESC differential at whatever angle the pilot and the sink/long dampeners have set. Those dampeners *do* move the servo — they are collective and slow (altitude trim), which is the servo's proper job — but the pitch loop never writes tilt. See `[AV-INVAR:sink-damp]`, `[AV-INVAR:plane-tilt-slew]`.
+
+**Forward-component side effect (bounded by the gate):** changing the front magnitude at a fixed tilt also moves its forward component. With the `cos_tilt` gate the perturbation is `inputs.pitch × cos_tilt × sin_tilt = inputs.pitch × ½ sin(2·tilt)` — zero at both hover and horizontal, peaking mid-transition. So the gate that fixes the past-horizontal inversion *also* fades this forward twitch to zero at cruise for free (the ungated term would have dumped a full `inputs.pitch × sin_tilt` there). Isolating the vertical component from the forward one entirely is impossible without re-tilting the servo, which we refuse to do — but the residual is small and self-limiting.
 
 ---
 
