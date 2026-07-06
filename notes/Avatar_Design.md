@@ -174,7 +174,7 @@ Driven by the copter roll PID targeting `nav_roll_cd` (same bank angle the FBWA 
 
 ### 4.4.1 Rear Motor Pitch Stabilisation During Tilt (Plane Mode)
 
-> **Update (log 00000093.BIN):** the rear-motor-only stabilisation described here proved insufficient — near hover at high throttle the rear pair rails and has no nose-down headroom left, and the nose departs. The plane branch now runs a full front-vs-rear pitch **couple** with cross-pair transfer, so the front pair supplies the missing authority. This section documents the original rear term (still present, and still the rear half of the couple); the couple itself is specified in `[AV-INVAR:plane-pitch-couple]` (§ 9).
+> **Update (log 00000093.BIN):** the rear-motor-only stabilisation described here proved insufficient — near hover at high throttle the rear pair rails and has no nose-down headroom left, and the nose departs. The plane branch now runs a full front-vs-rear pitch **couple** with cross-pair transfer, so the front pair supplies the missing authority. This section documents the original rear term (still present, and still the rear half of the couple); the couple itself is specified in `[AV-INVAR:plane-pitch-couple]` (§ 9), and the reasoning + rejected alternatives are in `notes/Avatar_Pitch_Control.md`.
 
 **The problem:** As the wing motors tilt from horizontal toward vertical, their thrust vector rotates. This rotation generates an uncontrolled pitch-up moment on the airframe. The elevator is already saturated at this point (that is what triggered the tilt in the first place), so it has no headroom left to resist this moment. Without active counteraction the aircraft will pitch up uncontrollably as the wings rotate.
 
@@ -395,11 +395,12 @@ rear = (throttle_thrust - inputs.pitch) * cosf(radians(state.current_tilt_deg))
 
 **Plane mode:**
 ```cpp
-rear = (throttle_pct - pitch_in) * tilt_delta
+cos_tilt_rear = max( cos_tilt_b, fmaxf(0, cos(tilt_deg − ahrs_pitch)) )  // more-vertical of body/earth
+rear_common   = (throttle_pct − inputs.pitch) * cos_tilt_rear
 ```
-- Zero when wings are horizontal (`tilt_delta = 0`)
-- Scales up only as stall-prevention tilt engages
-- Same sign convention: pitch-up demand reduces rear motor thrust
+- The rear pair carries the pitch/throttle common mode; it is the rear half of the pitch couple (`[AV-INVAR:plane-pitch-couple]`) plus the yaw differential on top (`[AV-INVAR:rear-pitch-priority]`).
+- **Scaled by the earth-frame wing angle, not the body-frame servo tilt** (`[AV-INVAR:rear-earth-frame-fade]`): the rear's physical moment is constant, so its `cos` is a scheduling fade of the hover actuator, and the true "am I in forward flight?" signal is the earth-frame thrust direction. Nose-high/hover-like keeps the rear available; level + wings-horizontal still fades it to zero.
+- Same sign convention: pitch-up demand (positive `inputs.pitch`) reduces rear motor thrust.
 
 Output is clamped to `[0, 1]` — rear motor is non-reversible.
 
@@ -898,6 +899,24 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 **Servo stays locked for pitch (but the dampeners still move it):** The tilt servo is a single shared actuator and is rate-limited; it physically cannot produce a front-vs-rear differential, and a symmetric re-vector produces no pitch moment. Pitch is therefore an ESC differential at whatever angle the pilot and the sink/long dampeners have set. Those dampeners *do* move the servo — they are collective and slow (altitude trim), which is the servo's proper job — but the pitch loop never writes tilt. See `[AV-INVAR:sink-damp]`, `[AV-INVAR:plane-tilt-slew]`.
 
 **Forward-component side effect (bounded by the gate):** changing the front magnitude at a fixed tilt also moves its forward component. With the `cos_tilt` gate the perturbation is `inputs.pitch × cos_tilt × sin_tilt = inputs.pitch × ½ sin(2·tilt)` — zero at both hover and horizontal, peaking mid-transition. So the gate that fixes the past-horizontal inversion *also* fades this forward twitch to zero at cruise for free (the ungated term would have dumped a full `inputs.pitch × sin_tilt` there). Isolating the vertical component from the forward one entirely is impossible without re-tilting the servo, which we refuse to do — but the residual is small and self-limiting.
+
+---
+
+### [AV-INVAR:rear-earth-frame-fade]
+
+**What:** The rear pair's common mode is scaled by the **more hover-like of the body-frame and earth-frame** wing angles, `cos_tilt_rear = fmaxf(cos_tilt_b, fmaxf(0, cos(tilt_deg − ahrs_pitch)))`, not the body-frame servo angle used everywhere else. Only the rear common mode uses it; the front couple, the roll differential, the cross-pair transfer, and the yaw differential all keep the body-frame `cos_tilt_b`.
+
+**Where:** `AP_Motors6DOF_AvatarMixer.cpp`, plane branch, `rear_common` computation. `inputs.ahrs_pitch_rad` is populated for every mix call in `AP_Motors6DOF.cpp` (mode-independent). Covered by Group S tests in `tests/mixer_test`. No-op at `ahrs_pitch = 0` (level fuselage), so all prior tests and all steady level flight are bit-for-bit unchanged.
+
+**Why:** The rear motor's *physical* pitch moment is constant (`thrust × arm`, bolted to the fuselage) — unlike the front couple and roll, whose `cos_tilt` is a genuine body-frame moment projection, the rear's `cos_tilt` is a **scheduling fade** that turns the hover actuator off "in forward flight". Body-frame wing tilt is the wrong indicator of forward flight when the fuselage is pitched: nose-high with wings at mid-tilt is a *hover-like* state (the thrust vector still points near earth-vertical), yet `cos(body_tilt)` throttles the rear right when it is most needed. Log 00000093 departed at ~55° pitch / ~40° tilt — body frame `cos40° = 0.77` vs earth frame `cos(40−55) = 0.97`. Offsetting the servo angle by AHRS pitch converts body → earth frame.
+
+**Why `max(body, earth)` and not earth alone:** `cos` is even, so `cos(tilt − pitch)` cannot tell "wings tilted forward of vertical" from "tilted behind vertical" — both fade the rear. That mis-fires for a wings-vertical hover (`tilt = 0`) knocked nose-up by a gust (`pitch = +45°`): earth angle `−45°` → `cos = 0.71`, spuriously cutting the rear exactly when a vertical hover needs *maximum* rear authority. Taking `max(cos_body, cos_earth)` lets whichever frame reads nearer vertical win. Crucially `max(body, earth) ≥ body`, so this can only ever **add** rear authority in a disturbed attitude, never remove it; it fades to zero only when **both** frames are horizontal (level forward flight). Nose-*down* needs no special case — the rear's nose-up correction reduces it toward 0 and the front couple supplies the rest.
+
+**Already flight-validated (copter):** the body→earth conversion is the exact compensation the copter TVC brain applies — `target_pitch_deg += current_pitch_deg` (§ 4.2) — so it is proven in QSTABILIZE/QLOITER. This invariant carries it into the plane rear schedule.
+
+**Why it stays correct for the Avatar specifically:** the airframe always commands a **level fuselage** (climb is done with wing tilt, not nose attitude — § 4.1/§ 4.4). So a nonzero AHRS pitch is *by construction* a disturbance / hover-like excursion, which is exactly when the rear should remain available. A conventional aircraft that climbs nose-up would mis-read this; the Avatar cannot. True forward flight (level + wings horizontal) still gives `cos(90° − 0°) = 0`, so the rear still fades to nothing in cruise.
+
+**Scope / caveats:** only the rear common mode is converted — the cross-pair transfer and yaw keep `cos_tilt_b`, a deliberate minimal change (the small frame mismatch only matters under saturation, second-order). The same `cos_tilt_rear` scales the rear *lift* (throttle) contribution as well as its pitch authority, since they share the term — sensible (a nose-high/hover-like state wants more rear lift), but it means rear lift now varies slightly with attitude. Scheduling on AHRS pitch (live) rather than the servo angle (clean/slow) adds a small attitude-dependent gain wobble; the feedback direction is stabilising (more authority when more disturbed) and the rear already reacts to pitch through `inputs.pitch`, so it is second-order. Not yet flight-verified on the Avatar.
 
 ---
 

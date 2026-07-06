@@ -793,6 +793,178 @@ void plane_pitch_priority_over_yaw_after_transfer()
 }
 
 // ============================================================================
+// GROUP S — Rear-motor earth-frame fade [AV-INVAR:rear-earth-frame-fade]
+//
+// The rear pair's cos scaling is a *scheduling* fade (its physical moment is
+// constant). It uses the EARTH-frame wing angle cos(tilt − ahrs_pitch), not the
+// body-frame servo angle, so a nose-high (hover-like) attitude keeps the rear
+// available instead of throttling it. This is the copter TVC's body→earth pitch
+// compensation applied to the plane rear schedule. All prior tests run at
+// ahrs_pitch = 0, where cos(tilt−0) = cos(tilt), so they are unaffected.
+// ============================================================================
+
+void plane_rear_fade_uses_earth_frame_not_body_frame()
+{
+    // Hold wing tilt at 45° and throttle 0.5, no pitch demand; vary only fuselage attitude:
+    //   level (ahrs_pitch = 0):   rear = 0.5·cos(45−0)  = 0.354  (body-frame reading)
+    //   nose-up 45° (hover-like): rear = 0.5·cos(45−45) = 0.500  (earth-frame: full)
+    begin_test(__func__);
+    const float d45   = 45.0f * (float)(M_PI / 180.0);
+    const float cos45 = std::cos(d45);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 0.5f;   // wings 45° (body)
+    in.plane.throttle_pct      = 50.0f;
+    in.pitch                   = 0.0f;
+
+    in.ahrs_pitch_rad = 0.0f;            // level fuselage
+    MixerState s1; MixerOutputs o1; mixer.mix(in, s1, o1);
+    CHECK_NEAR(0.5f * cos45, o1.motor_thrust[2], 0.002f);  // body-frame value
+
+    in.ahrs_pitch_rad = d45;             // nose-up 45°
+    MixerState s2; MixerOutputs o2; mixer.mix(in, s2, o2);
+    CHECK_NEAR(0.5f, o2.motor_thrust[2], 0.002f);          // earth-frame → full
+    CHECK_TRUE(o2.motor_thrust[2] > o1.motor_thrust[2]);   // nose-up opens the rear
+    end_test();
+}
+
+void plane_rear_earth_frame_still_zero_in_level_forward_flight()
+{
+    // The change must NOT reintroduce rear thrust in genuine cruise: level fuselage
+    // (ahrs_pitch = 0) + wings horizontal (tilt 90°) → rear = throttle·cos(90−0) = 0.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 0.0f;   // wings horizontal
+    in.plane.throttle_pct      = 50.0f;
+    in.pitch                   = 0.0f;
+    in.ahrs_pitch_rad          = 0.0f;   // level
+    MixerState state; MixerOutputs out; mixer.mix(in, state, out);
+    CHECK_NEAR(0.0f, out.motor_thrust[2], 0.001f);
+    end_test();
+}
+
+void plane_rear_earth_frame_nose_up_past_tilt_stays_near_full()
+{
+    // Even when the fuselage pitches UP PAST the wing tilt (the log-00000093 departure had
+    // ~55° pitch vs ~40° tilt), the rear keeps near-full authority: earth angle = tilt − pitch
+    // = 45 − 60 = −15°, and cos is even, so cos(−15°) = 0.966. Body frame would fade it to
+    // cos45° = 0.707.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 0.5f;   // wings 45°
+    in.plane.throttle_pct      = 50.0f;
+    in.pitch                   = 0.0f;
+    in.ahrs_pitch_rad          = 60.0f * (float)(M_PI / 180.0);
+    MixerState state; MixerOutputs out; mixer.mix(in, state, out);
+    float earth = std::cos(15.0f * (float)(M_PI / 180.0));  // cos(45−60) = cos(−15) ≈ 0.966
+    float body  = 0.5f * std::cos(45.0f * (float)(M_PI / 180.0));
+    CHECK_NEAR(0.5f * earth, out.motor_thrust[2], 0.005f);
+    CHECK_TRUE(out.motor_thrust[2] > body);
+    end_test();
+}
+
+void plane_rear_fade_takes_max_of_body_and_earth_frame()
+{
+    // cos is even, so earth-frame ALONE under-reads a wings-vertical hover knocked nose-up:
+    // wings vertical (tilt 0°) + gust to +45° pitch → earth angle −45° → cos(−45°) = 0.707,
+    // which would wrongly cut the rear to 0.354 in a hover that needs MAX authority. Taking
+    // max(body, earth) = max(cos0°, cos(−45°)) = max(1.0, 0.707) = 1.0 keeps the rear full.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 1.0f;   // wings vertical (tilt 0°) → body cos = 1.0
+    in.plane.throttle_pct      = 50.0f;
+    in.pitch                   = 0.0f;
+    in.ahrs_pitch_rad          = 45.0f * (float)(M_PI / 180.0);  // gust pitched nose up 45°
+    MixerState state; MixerOutputs out; mixer.mix(in, state, out);
+    CHECK_NEAR(0.5f, out.motor_thrust[2], 0.002f);   // full via body frame (earth alone → 0.354)
+    end_test();
+}
+
+void plane_rear_earth_frame_boosts_pitch_authority_when_nose_high()
+{
+    // The point of the change: more rear PITCH authority when nose-high. Wings 45°, nose-down
+    // correction demanded (inputs.pitch = −0.3 → rear ADDS thrust). Same PID demand delivers
+    // more nose-down authority when the aircraft is disturbed nose-up:
+    //   level:   rear = (0.5 − (−0.3))·cos(45−0)  = 0.8·0.707 = 0.566
+    //   nose-up: rear = (0.5 − (−0.3))·cos(45−45) = 0.8·1.0   = 0.800
+    begin_test(__func__);
+    const float cos45 = std::cos(45.0f * (float)(M_PI / 180.0));
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 0.5f;
+    in.plane.throttle_pct      = 50.0f;
+    in.pitch                   = -0.3f;  // nose-down correction demanded
+
+    in.ahrs_pitch_rad = 0.0f;
+    MixerState s1; MixerOutputs o1; mixer.mix(in, s1, o1);
+    CHECK_NEAR(0.8f * cos45, o1.motor_thrust[2], 0.005f);  // 0.566
+
+    in.ahrs_pitch_rad = 45.0f * (float)(M_PI / 180.0);
+    MixerState s2; MixerOutputs o2; mixer.mix(in, s2, o2);
+    CHECK_NEAR(0.8f, o2.motor_thrust[2], 0.005f);          // 0.800 — more delivered authority
+    CHECK_TRUE(o2.motor_thrust[2] > o1.motor_thrust[2]);
+    end_test();
+}
+
+// ============================================================================
+// GROUP T — Plane pitch integration (all pieces together)
+// ============================================================================
+
+void plane_nose_up_recovery_produces_net_nose_down_couple()
+{
+    // End-to-end recovery intent — the log-00000093 scenario. Aircraft pitched nose-up 45°,
+    // high throttle, copter PID demanding nose-down (inputs.pitch < 0). Everything must combine:
+    //   cos_tilt_b    = cos45° = 0.707                          (front couple)
+    //   cos_tilt_rear = max(cos45°, cos(45−45)) = 1.0           (earth-frame → rear full)
+    //   front = 0.7 + (−0.4)·0.707 = 0.417
+    //   rear  = (0.7 − (−0.4))·1.0 = 1.1 → rails at 1.0, excess 0.1 transferred to front
+    //   front = 0.417 − 0.1 = 0.317
+    // Result: rear UP (railed), front DOWN → a strong net nose-down couple, and limit.pitch
+    // stays FALSE because the moment was delivered despite the rear rail.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 0.5f;   // wings 45°
+    in.plane.throttle_pct      = 70.0f;
+    in.pitch                   = -0.4f;  // PID: nose-down correction
+    in.ahrs_pitch_rad          = 45.0f * (float)(M_PI / 180.0);  // aircraft nose-up 45°
+    MixerState state; MixerOutputs out; mixer.mix(in, state, out);
+    CHECK_TRUE(out.motor_thrust[2] > out.motor_thrust[0]);   // rear > front (nose-down couple)
+    CHECK_TRUE(out.motor_thrust[3] > out.motor_thrust[1]);
+    CHECK_NEAR(1.0f,    out.motor_thrust[2], 0.01f);         // rear railed (full nose-down)
+    CHECK_NEAR(0.317f,  out.motor_thrust[0], 0.01f);         // front gave up the rear's excess
+    CHECK_FALSE(out.limit.pitch);                            // couple delivered despite rear rail
+    end_test();
+}
+
+void plane_roll_and_pitch_couple_coexist()
+{
+    // Roll differential and the pitch couple must not corrupt each other. Wings vertical
+    // (cos=1), throttle 0.5, nose-up pitch 0.2, right-roll 0.1:
+    //   front common = 0.5 + 0.2 = 0.7,  roll_delta = 0.1
+    //   left = 0.8, right = 0.6;  rear = (0.5 − 0.2)·1 = 0.3
+    // The roll differential (0.1) and the pitch common mode (0.7) are both intact.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerInputs  in = neutral_plane_inputs();
+    in.plane.pitch_tilt_demand = 1.0f;   // wings vertical
+    in.plane.throttle_pct      = 50.0f;
+    in.pitch                   = 0.2f;
+    in.roll                    = 0.1f;
+    in.ahrs_pitch_rad          = 0.0f;
+    MixerState state; MixerOutputs out; mixer.mix(in, state, out);
+    CHECK_NEAR(0.8f, out.motor_thrust[0], 0.002f);  // front left  = common + roll
+    CHECK_NEAR(0.6f, out.motor_thrust[1], 0.002f);  // front right = common − roll
+    CHECK_NEAR(0.3f, out.motor_thrust[2], 0.002f);  // rear (pitch only, roll doesn't touch it)
+    CHECK_NEAR(0.1f, (out.motor_thrust[0] - out.motor_thrust[1]) * 0.5f, 0.002f); // roll intact
+    CHECK_NEAR(0.7f, (out.motor_thrust[0] + out.motor_thrust[1]) * 0.5f, 0.002f); // pitch intact
+    end_test();
+}
+
+// ============================================================================
 // LAYER 3: AvatarMixer — COPTER MODE (TVC brain drives tilt)
 // ============================================================================
 
@@ -2943,6 +3115,17 @@ int main()
     plane_pitch_couple_gated_off_past_horizontal_no_inversion();
     plane_pitch_down_front_railed_at_zero_truncates_and_flags();
     plane_pitch_priority_over_yaw_after_transfer();
+
+    std::printf("\n-- Group S: Rear-motor earth-frame fade [AV-INVAR:rear-earth-frame-fade] --\n");
+    plane_rear_fade_uses_earth_frame_not_body_frame();
+    plane_rear_earth_frame_still_zero_in_level_forward_flight();
+    plane_rear_earth_frame_nose_up_past_tilt_stays_near_full();
+    plane_rear_fade_takes_max_of_body_and_earth_frame();
+    plane_rear_earth_frame_boosts_pitch_authority_when_nose_high();
+
+    std::printf("\n-- Group T: Plane pitch integration (all pieces together) --\n");
+    plane_nose_up_recovery_produces_net_nose_down_couple();
+    plane_roll_and_pitch_couple_coexist();
 
     std::printf("\n-- Group P: Mode-transition blend [AV-INVAR:mode-transition-blend] --\n");
     blend_q_to_q_mode_change_blends_throttle_step();

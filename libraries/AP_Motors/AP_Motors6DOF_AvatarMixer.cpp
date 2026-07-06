@@ -301,7 +301,36 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
         // (`[AV-INVAR:cos-tilt-i-zero]`). NEVER divide by cos_tilt to "rebalance" the couple —
         // that restores balance but blows up at horizontal, which is the fade we actually want.
         float front_common = throttle_pct + inputs.pitch * cos_tilt_b;
-        float rear_common  = (throttle_pct - inputs.pitch) * cos_tilt_b;
+
+        // The rear pair fades on the MORE hover-like of the body-frame and earth-frame wing
+        // angles — max(cos_tilt_b, cos(tilt − ahrs_pitch)) — not the body-frame servo angle alone.
+        // [AV-INVAR:rear-earth-frame-fade] — see Avatar_Design.md § 4.9 / § 9.
+        // Unlike the front couple and the roll differential (real body-frame moment projections,
+        // scaled by cos_tilt_b above), the rear pair's cos scaling is a *scheduling* fade: the
+        // rear motor's actual pitch moment is constant (thrust × arm, bolted to the fuselage), and
+        // we choose to fade the hover actuator out "in forward flight". Body-frame wing tilt is the
+        // wrong indicator when the fuselage is pitched — nose-high with wings mid-tilt is a
+        // hover-like state (thrust still near earth-vertical), yet cos(body_tilt) throttles the
+        // rear right when it is needed (log 00000093 departed at ~55° pitch, ~40° tilt: body
+        // cos40°=0.77 but earth cos(40−55)=0.97). Offsetting the servo angle by AHRS pitch converts
+        // body → earth frame — the SAME compensation the copter TVC brain applies (target_pitch +=
+        // current_pitch), so it is already flight-validated in copter modes.
+        //
+        // But cos is EVEN, so earth-frame ALONE under-reads a different hover case: wings already
+        // vertical (tilt=0) and a gust pitches the nose up 45° → earth angle −45° → cos(−45)=0.71,
+        // spuriously fading the rear exactly when a wings-vertical hover needs MAXIMUM authority.
+        // So take max(body, earth): whichever frame reads nearer vertical wins. This is ≥ the old
+        // body-frame fade, so it can only ADD rear authority in a disturbed attitude, never remove
+        // it, and it fades to zero only when BOTH frames are horizontal (genuine level forward
+        // flight). Nose-DOWN needs no special case: the rear's nose-up correction reduces it toward
+        // 0 and the front couple supplies the rest. Because the Avatar always commands a LEVEL
+        // fuselage (climb is done with tilt, not nose attitude), a nonzero AHRS pitch means
+        // "disturbed / hover-like" — exactly when the rear should stay available. Scope: only the
+        // rear common mode; the cross-pair transfer and yaw keep cos_tilt_b.
+        const float cos_tilt_earth = fmaxf(0.0f,
+            cosf(radians(state.current_tilt_deg) - inputs.ahrs_pitch_rad));
+        const float cos_tilt_rear = fmaxf(cos_tilt_b, cos_tilt_earth);
+        float rear_common  = (throttle_pct - inputs.pitch) * cos_tilt_rear;
 
         // [AV-INVAR:pitch-before-throttle] — cross-pair transfer (mirror of the copter branch).
         // When one pair rails at 1.0 it cannot deliver the pitch demanded of it; take the
