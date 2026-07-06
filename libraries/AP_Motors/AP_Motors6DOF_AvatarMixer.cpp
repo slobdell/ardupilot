@@ -29,6 +29,13 @@ const float AVATAR_MANUAL_YAW_DEADBAND = 0.05f;
 // blending is impossible until one full frame in a mode has been recorded.
 static const uint8_t AVATAR_MODE_ID_NONE = 255;
 
+// [AV-INVAR:fs-ground-disarm] — commanded trim thrust below this magnitude counts as
+// "quiet" for the ground-disarm clock. Any airborne regime commands well above it
+// (STABILIZE hover: pilot stick; CRUISE: TECS holds >= ~TRIM even with stick at bottom).
+static const float AVATAR_THRUST_QUIET_THRESH = 0.05f;
+// Cap so the clock cannot grow unbounded across a long parked-armed session.
+static const float AVATAR_THRUST_QUIET_CAP_S = 600.0f;
+
 // [AV-INVAR:mode-transition-blend] — see Avatar_Design.md § 9
 // Blend the branch's live commanded trim vector with the snapshot frozen at the
 // last flight-mode edge. Interpolation is done in FORCE SPACE (horizontal,
@@ -120,6 +127,21 @@ void AvatarMixer::mix(const MixerInputs& inputs, MixerState& state, MixerOutputs
             const float blend_s = (inputs.plane.transition_blend_s > 0.01f)
                                   ? inputs.plane.transition_blend_s : 1.5f;
             state.mode_blend = fminf(1.0f, state.mode_blend + inputs.dt / blend_s);
+        }
+    }
+
+    // [AV-INVAR:fs-ground-disarm] — commanded-thrust quiet clock. Uses the previous
+    // frame's recorded trim vector (one-frame lag is irrelevant against a multi-second
+    // window). Not spooled up counts as quiet: commanded thrust is zero by definition.
+    {
+        const float cmd_mag = sqrtf(state.last_thrust_horiz * state.last_thrust_horiz +
+                                    state.last_thrust_vert  * state.last_thrust_vert);
+        if (inputs.spool_state != AP_Motors::SpoolState::THROTTLE_UNLIMITED ||
+            cmd_mag < AVATAR_THRUST_QUIET_THRESH) {
+            state.thrust_quiet_s = fminf(state.thrust_quiet_s + inputs.dt,
+                                         AVATAR_THRUST_QUIET_CAP_S);
+        } else {
+            state.thrust_quiet_s = 0.0f;
         }
     }
 

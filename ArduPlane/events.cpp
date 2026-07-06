@@ -19,12 +19,41 @@ bool Plane::failsafe_in_landing_sequence() const
     return false;
 }
 
+// [AV-INVAR:fs-ground-disarm] — quiet-window length: the mixer's commanded trim
+// thrust must have been ~zero this long before a linkloss disarm is allowed.
+static const float FS_GROUND_DISARM_QUIET_S = 3.0f;
+
+// [AV-INVAR:fs-ground-disarm] — see Avatar_Design.md § 9 and notes/rc_failsafe.md § 4.
+// Link loss while landed => immediate disarm, restoring the radio-off-guarantees-disarm
+// workflow the blimp kill switch used to provide. Gated on BOTH !is_flying() AND a
+// sustained zero commanded thrust: near-stationary CRUISE can decay is_flying() to
+// false at altitude, but TECS commands high thrust there, so the pair can only be
+// satisfied on the ground. Airborne link loss falls through to stock recovery.
+bool Plane::failsafe_landed_disarm_check(void)
+{
+#if HAL_QUADPLANE_ENABLED && ENABLE_TRICOPTER_VTOL_BACKEND
+    if (g_config.failsafe_disarm_when_landed && quadplane.available() &&
+        !is_flying() &&
+        ((AP_Motors6DOF *)quadplane.motors)->get_thrust_quiet_s() > FS_GROUND_DISARM_QUIET_S) {
+        gcs().send_text(MAV_SEVERITY_WARNING, "RC Failsafe: landed, disarming");
+        arming.disarm(AP_Arming::Method::RADIOFAILSAFE);
+        return true;
+    }
+#endif
+    return false;
+}
+
 void Plane::failsafe_short_on_event(enum failsafe_state fstype, ModeReason reason)
 {
     // SBL check for balloon kill switch
     if (g_config.failsafe_kill_motors) {
         gcs().send_text(MAV_SEVERITY_WARNING, "RC Short Failsafe: Killing Motors");
         arming.disarm(AP_Arming::Method::RADIOFAILSAFE);
+        return;
+    }
+
+    // [AV-INVAR:fs-ground-disarm]
+    if (failsafe_landed_disarm_check()) {
         return;
     }
 
@@ -119,6 +148,12 @@ void Plane::failsafe_long_on_event(enum failsafe_state fstype, ModeReason reason
     if (g_config.failsafe_kill_motors) {
         gcs().send_text(MAV_SEVERITY_WARNING, "RC Long Failsafe: Killing Motors");
         arming.disarm(AP_Arming::Method::RADIOFAILSAFE);
+        return;
+    }
+
+    // [AV-INVAR:fs-ground-disarm] — normally unreachable (short handler fires first),
+    // kept for symmetry in case long fires with short disabled or after a mode churn.
+    if (failsafe_landed_disarm_check()) {
         return;
     }
 

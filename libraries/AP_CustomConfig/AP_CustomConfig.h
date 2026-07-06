@@ -21,6 +21,7 @@ struct CustomConfig {
     int16_t mot_spin_min;
     float acro_yaw_gain;
     bool failsafe_kill_motors;
+    bool failsafe_disarm_when_landed; // [AV-INVAR:fs-ground-disarm] RC linkloss + !is_flying + thrust quiet => disarm
     bool indoor_aircraft;
     int diff_yaw_enabled;
     bool visodom_primary_compass;

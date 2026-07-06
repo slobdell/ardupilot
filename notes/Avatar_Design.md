@@ -1035,6 +1035,34 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 ---
 
+### [AV-INVAR:fs-ground-disarm]
+
+**What:** On RC link loss, disarm immediately **only when landed**, where "landed" = `!plane.is_flying()` **AND** the mixer's commanded trim thrust magnitude has been < 0.05 for > 3 s (`state.thrust_quiet_s`, accumulated every mixing frame; not-spooled-up counts as quiet). Airborne link loss falls through to the stock failsafe machinery (Q modes → QLAND, plane modes → CIRCLE → RTL). Restores the "turn the radio off to guarantee a disarm" ground workflow that the blimp's `failsafe_kill_motors` used to provide, without the blimp switch's crash-on-linkloss-in-flight behavior.
+
+**Where:** `ArduPlane/events.cpp` — `failsafe_landed_disarm_check()`, called at the top of both `failsafe_short_on_event` and `failsafe_long_on_event` (after the blimp kill switch check); quiet clock in `AP_Motors6DOF_AvatarMixer.cpp` (`mix()`, after the mode-blend clock) + `MixerState::thrust_quiet_s` + `AP_Motors6DOF::get_thrust_quiet_s()`; enabled by `g_config.failsafe_disarm_when_landed` (Avatar true, blimp false — the blimp's `failsafe_kill_motors=true` short-circuits first anyway).
+
+**Why two conditions:** `is_flying()` alone has a crash-grade false-negative on Avatar — in near-stationary CRUISE (deep headwind), `motors->get_throttle()` reads the pilot stick (~0 in TECS modes, `quadplane.cpp` `set_throttle_out(get_pilot_throttle())`), ground speed is below the 1.5 m/s heuristic, and the no-sensor airspeed estimate is unreliable, so `is_flying()` can decay false **at altitude**. The thrust-quiet condition is the backstop: in that regime TECS commands ≥ ~`TRIM_THROTTLE`, in a STABILIZE hover the pilot stick is high — every airborne regime commands substantial thrust, while a landed aircraft commands ~0 in every mode. The pair is satisfiable only on the ground.
+
+**Why the trim vector (not motor outputs or pilot stick):** `last_thrust_horiz/vert` is recorded by both mixer branches every frame (shared with `[AV-INVAR:mode-transition-blend]`) — mode-agnostic, excludes stabilization deltas (a landed aircraft being nudged by wind still reads quiet), and reflects *commanded* intent rather than pilot input (so CRUISE with stick at bottom still reads loud).
+
+**Do not** replace the pair with `!is_flying()` alone (mid-air disarm in the CRUISE gap regime) or gate on pilot stick position (CRUISE flies with the stick at zero). Tests: mixer_test Group Q.
+
+---
+
+### [AV-INVAR:pitch-90-identity]
+
+**What:** `PTCH_LIM_MAX_DEG` must be exactly 90. It is not a tuning limit on this aircraft — it is the scale factor that makes "TECS pitch demand in degrees" a literal 1:1 identity with "thrust-vector elevation in degrees," and it appears in three independent code paths that are only mutually consistent at 90.
+
+**Where:** Parameter file (`PTCH_LIM_MAX_DEG,90`); the three code dependencies are: (1) `ArduPlane/quadplane.cpp` PlaneInputs injection — `pitch_tilt_demand = nav_pitch_cd / (pitch_limit_max × 100)`, consumed by the mixer position branch (`AP_Motors6DOF_AvatarMixer.cpp`, `target_tilt_angle = cruise_norm × (1 − demand)`) where demand 1.0 = rotors fully vertical; (2) `[AV-INVAR:tecs-synth-pitch]` — the feedback path reports `90° − tilt` (thrust elevation) to TECS as measured pitch; (3) `AP_TECS.cpp` `_update_throttle_without_airspeed()` — `throttle = TRIM + (THR_MAX − TRIM) × pitch_blended / _PITCHmaxf`.
+
+**Why 90 and only 90:** With the physical cruise angle at 90° from vertical, path (1) at `PTCH_LIM_MAX = 90` maps a demanded pitch of X° to a thrust elevation of exactly X°; path (2) then reports exactly X° back, so measured = demanded at steady state and the loop is dimensionally closed; path (3) then reaches `THR_MAX` at exactly 90° of blended pitch = exactly full tilt-up, pinning maximum thrust to precisely the regime where the aircraft hangs on its rotors. TECS itself does **no trigonometry** — its throttle law is a linear ramp that was designed as a crude "climbing costs power" heuristic for conventional planes. On Avatar the ramp doesn't need to be aerodynamically correct (the height-loop integrator trims out feed-forward error; the real force-vector trig lives in the mixer), but it must be *monotonic with correctly pinned endpoints*, and `PTCH_LIM_MAX = 90` is what pins the top endpoint to "vertical rotors = max throttle."
+
+**Failure mode if changed:** any other value desynchronizes all three paths at once. Example at 45: TECS demanding 45° pitch would command rotors fully vertical (path 1), the feedback would report 90° against a 45° demand (path 2 identity broken, permanent apparent overshoot), and the throttle ramp would saturate at `THR_MAX` from 45° of elevation onward (path 3). The value looks like an innocent "maximum pitch" tuning knob to anyone with conventional-plane instincts — lowering it "for safety" is the anticipated mistake this invariant guards against.
+
+**Note:** `PTCH_LIM_MIN_DEG` (= −25) carries no such identity — descent is throttle-cut-dominated, the tilt-forward-of-cruise range is deliberately small, and its value is a genuine tuning choice. See `notes/cruise_considerations.md` § 7 for the operational summary.
+
+---
+
 ### [AV-INVAR:plane-tilt-slew]
 
 **What:** In FBWA plane mode, `outputs.tilt_angle` (the servo command) is rate-limited before being written. The target is computed from `nav_pitch_cd` (pilot stick + TECS) as normal, but `state.current_tilt_deg` slews toward it at an asymmetric rate: fast toward vertical (Q_TILT_RATE_UP, servo physical speed) and slow toward horizontal (Q_TILT_RATE_DN, an independent design choice). `outputs.tilt_angle` is then derived from the slewed `state.current_tilt_deg`, so all downstream calculations (`tilt_deg_b`, `cos_tilt_b`, roll differential, rear motor) use the commanded position.

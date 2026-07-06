@@ -10,6 +10,7 @@ const CustomConfig blimpConfig = {
     .mot_spin_min = 1000,
     .acro_yaw_gain = 1.0f,
     .failsafe_kill_motors = true,
+    .failsafe_disarm_when_landed = false, // unreachable: kill_motors above disarms first
     .indoor_aircraft = false,
     .diff_yaw_enabled = 0,
     .visodom_primary_compass = false,
@@ -36,7 +37,14 @@ const CustomConfig avatarConfig = {
     .mot_spin_neutral = 1000, // Avatar might not use reversible motors by default
     .mot_spin_min = 1000,
     .acro_yaw_gain = 1.0f,
-    .failsafe_kill_motors = true,
+    // false = stock RC-failsafe machinery (Q modes -> QLAND, plane modes -> CIRCLE -> RTL).
+    // The blimp's kill-on-linkloss is a crash from altitude on a non-buoyant airframe.
+    // See notes/cruise_considerations.md § 5.5. Blimp config must keep true.
+    .failsafe_kill_motors = false,
+    // [AV-INVAR:fs-ground-disarm] restore the radio-off-guarantees-disarm workflow:
+    // link loss while landed (not flying AND commanded thrust quiet) disarms immediately;
+    // link loss in the air falls through to stock recovery. See notes/rc_failsafe.md § 4.
+    .failsafe_disarm_when_landed = true,
     .indoor_aircraft = false,
     .diff_yaw_enabled = 1,    // Avatar might use differential yaw
     .visodom_primary_compass = false,

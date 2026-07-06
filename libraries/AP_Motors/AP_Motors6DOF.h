@@ -70,6 +70,10 @@ public:
     // Latch the pilot tilt reference to the current corrected tilt angle — see [AV-INVAR:vel-damp]
     void set_pilot_tilt_deg(float deg) { _mixer_state.pilot_tilt_deg = deg; }
 
+    // [AV-INVAR:fs-ground-disarm] — seconds the commanded trim thrust has been ~zero
+    // (or motors not spooled up); ground evidence for the RC-failsafe disarm gate
+    float get_thrust_quiet_s() const { return _mixer_state.thrust_quiet_s; }
+
     // output_min - sends minimum values out to the motors
     void output_min() override;
 

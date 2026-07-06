@@ -1046,6 +1046,8 @@ private:
     bool autotuning;
 
     // events.cpp
+    // [AV-INVAR:fs-ground-disarm] — disarm on RC linkloss when landed; true if disarmed
+    bool failsafe_landed_disarm_check(void);
     void failsafe_short_on_event(enum failsafe_state fstype, ModeReason reason);
     void failsafe_long_on_event(enum failsafe_state fstype, ModeReason reason);
     void failsafe_short_off_event(ModeReason reason);

@@ -128,6 +128,12 @@ struct MixerState {
     float mode_blend;           // 0 = fully snapshot, 1 = fully live (blend inactive)
     uint8_t last_mode_id;       // control-mode id seen last frame; 255 = none (no blend possible)
 
+    // [AV-INVAR:fs-ground-disarm] — seconds the commanded trim thrust magnitude has been
+    // ~zero (or motors not spooled up). Consumed by the RC-failsafe ground-disarm gate;
+    // any airborne regime commands substantial thrust, so a sustained quiet clock is
+    // ground evidence that is robust where Plane::is_flying() is not.
+    float thrust_quiet_s;
+
     bool manual_override_active;
     bool pitch_saturated;
     bool roll_saturated;
@@ -149,6 +155,7 @@ struct MixerState {
         snap_thrust_vert(0.0f),
         mode_blend(1.0f),
         last_mode_id(255),
+        thrust_quiet_s(0.0f),
         manual_override_active(false),
         pitch_saturated(false),
         roll_saturated(false),

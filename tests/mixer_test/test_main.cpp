@@ -2475,6 +2475,100 @@ void position_mode_syncs_pilot_tilt_for_rate_mode_entry()
 }
 
 // ============================================================================
+// GROUP Q — Commanded-thrust quiet clock [AV-INVAR:fs-ground-disarm]
+//
+// state.thrust_quiet_s counts seconds the commanded trim thrust magnitude has
+// been ~zero (or the motors not spooled up). The RC-failsafe ground-disarm gate
+// consumes it: link loss disarms only when !is_flying() AND quiet > 3 s. These
+// tests pin the clock's semantics: accumulate when quiet or unspooled, reset the
+// moment real thrust is commanded, in both mixer branches. The clock reads the
+// previous frame's recorded vector, so edges land within one frame (dt=2.5 ms) —
+// tolerances below allow that lag.
+// ============================================================================
+
+void quiet_clock_accumulates_when_not_spooled()
+{
+    // GROUND_IDLE counts as quiet by definition, regardless of throttle input.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerState   state;
+    MixerOutputs out;
+    MixerInputs  in = copter_inputs_mode(17);
+    in.spool_state = AP_Motors::SpoolState::GROUND_IDLE;
+    for (int i = 0; i < 400; i++) mixer.mix(in, state, out);   // 1.0 s
+    CHECK_NEAR(1.0f, state.thrust_quiet_s, 0.01f);
+    end_test();
+}
+
+void quiet_clock_stays_zero_in_copter_hover()
+{
+    // Hover at 0.5 commanded thrust: the clock must hold at ~0 (the very first
+    // frame may tick once before the recorded vector exists).
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerState   state;
+    MixerOutputs out;
+    MixerInputs  in = copter_inputs_mode(17);
+    for (int i = 0; i < 400; i++) mixer.mix(in, state, out);
+    CHECK_NEAR(0.0f, state.thrust_quiet_s, 0.01f);
+    end_test();
+}
+
+void quiet_clock_accumulates_in_plane_mode_zero_throttle()
+{
+    // Landed in STABILIZE, spool still forced THROTTLE_UNLIMITED (plane modes
+    // always are), throttle stick at zero: the clock must pass the 3 s disarm
+    // window. This is the exact state the failsafe gate wants to catch.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerState   state;
+    MixerOutputs out;
+    MixerInputs  in = stabilize_inputs_mode(2);
+    in.plane.throttle_pct = 0.0f;
+    for (int i = 0; i < 1600; i++) mixer.mix(in, state, out);  // 4.0 s
+    CHECK_TRUE(state.thrust_quiet_s > 3.0f);
+    end_test();
+}
+
+void quiet_clock_stays_zero_in_plane_mode_with_thrust()
+{
+    // CRUISE-like: TECS holds substantial throttle even with the pilot stick at
+    // bottom — the clock must never accumulate, so the airborne near-stationary
+    // regime (where is_flying() can decay false) can never satisfy the gate.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerState   state;
+    MixerOutputs out;
+    MixerInputs  in = stabilize_inputs_mode(7);
+    in.plane.tilt_rate_mode = false;          // position mode (CRUISE/AUTO)
+    in.plane.throttle_pct   = 45.0f;          // TECS TRIM_THROTTLE
+    for (int i = 0; i < 1600; i++) mixer.mix(in, state, out);  // 4.0 s
+    CHECK_NEAR(0.0f, state.thrust_quiet_s, 0.01f);
+    end_test();
+}
+
+void quiet_clock_resets_when_thrust_returns()
+{
+    // Accumulate a long quiet period on the ground, then command thrust:
+    // the clock must reset to zero within a frame or two, so a pre-takeoff
+    // quiet history can never satisfy the gate once flying.
+    begin_test(__func__);
+    AvatarMixer  mixer;
+    MixerState   state;
+    MixerOutputs out;
+    MixerInputs  quiet = stabilize_inputs_mode(2);
+    quiet.plane.throttle_pct = 0.0f;
+    for (int i = 0; i < 2000; i++) mixer.mix(quiet, state, out);  // 5.0 s quiet
+    CHECK_TRUE(state.thrust_quiet_s > 3.0f);
+
+    MixerInputs fly = stabilize_inputs_mode(2);
+    fly.plane.throttle_pct = 50.0f;
+    for (int i = 0; i < 3; i++) mixer.mix(fly, state, out);
+    CHECK_NEAR(0.0f, state.thrust_quiet_s, 0.01f);
+    end_test();
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -2608,6 +2702,13 @@ int main()
     blend_duration_follows_transition_blend_s();
     blend_stabilisation_terms_stay_live_during_blend();
     position_mode_syncs_pilot_tilt_for_rate_mode_entry();
+
+    // GROUP Q — commanded-thrust quiet clock [AV-INVAR:fs-ground-disarm]
+    quiet_clock_accumulates_when_not_spooled();
+    quiet_clock_stays_zero_in_copter_hover();
+    quiet_clock_accumulates_in_plane_mode_zero_throttle();
+    quiet_clock_stays_zero_in_plane_mode_with_thrust();
+    quiet_clock_resets_when_thrust_returns();
 
     std::printf("\n-- Layer 4: BlimpMixer plane mode --\n");
     blimp_plane_neutral_stick_gives_full_forward_tilt();
