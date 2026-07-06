@@ -6,16 +6,30 @@
 
 ---
 
-## Hardware Config (Current)
-- **Props:** 6-inch 4.5-pitch (recently swapped from 3-blade standard)
-- **Notch filter:** `INS_HNTCH_FREQ=361.27 Hz` (re-tuned for new props via RC8 auto-setup)
-- **Hover throttle:** `Q_M_THST_HOVER=0.35` — aircraft works hard to hover; margins are tight
+## Hardware Config (Current — updated 2026-07-05)
+- **Front (wing) motors:** M3110-900KV, 9x5x3 (3-blade) props — upgraded from the earlier small/weak combo
+- **Critical ESC gotcha:** AM32 ESCs default to `Motor KV=2220` regardless of installed motor. This was silently capping real thrust output on the front motors (RCOU tracked RC input fine, but real thrust never scaled with it — looked like a saturated/underpowered system). Fixed by setting Motor KV to the correct 900 in the AM32 configurator. See `AM32_ESC_Setup.md` — **check this on every ESC, including the rear yaw motors, if not already verified** (see Outstanding Items below).
+- **Notch filter:** `INS_HNTCH_FREQ=107.14 Hz`, `INS_HNTCH_BW=53.57`, `INS_HNTCH_HMNCS=5` (re-tuned via RC8 auto-setup for the new 9x5x3 3-blade prop — much lower blade-pass frequency than the old prop, and now tracking two harmonics instead of one)
+- **Hover throttle:** `Q_M_THST_HOVER=0.35` — unchanged since the last check
+- **`Q_M_THST_EXPO=0.65`** — raised from 0.55 now that the front motors are a larger, higher-torque combo (0.65 is ArduPilot's stock default for typical multirotor motor/prop pairs; 0.55 was tuned down specifically for the old, more linear-thrust-curve small motor combo)
 
 ---
 
-## Roll PID — Tuned to Physical Authority Limit (June 21, 2026)
+## Roll PID — Retuned After Front Motor KV Fix (July 5, 2026)
 
-### Final Values
+**Why retuned:** the June 21 values below were tuned against a front motor/ESC combo that was silently thrust-limited (see the AM32 Motor KV gotcha above) — those gains were "maxed to physical authority limit" for a system that couldn't actually deliver full commanded thrust. Fixing the KV mismatch and swapping to the 9x5x3 prop increased real plant gain substantially, and the June values immediately caused full-rail saturation oscillation on the first flight after the fix.
+
+### Current Final Values (July 5, 2026)
+```
+Q_A_RAT_RLL_P  = 0.10
+Q_A_RAT_RLL_I  = 0.10
+Q_A_RAT_RLL_D  = 0.0025
+Q_A_RAT_RLL_FF = 0.18
+```
+
+Retune path: P/D halved together first (0.20→0.10, 0.004→0.002) to escape rail-to-rail saturation — worked, but still had residual high-frequency content. Tried isolating by cutting D further (→0.001) per the "change one variable" workflow below; this made things *worse* (post-release wobble, larger rate overshoot), proving D was providing needed damping rather than amplifying noise this time. Corrected back up to 0.0025, which flew cleanly with no saturation and no release-wobble.
+
+### Historical Values (June 21, 2026 — superseded, kept for reference)
 ```
 Q_A_RAT_RLL_P  = 0.200
 Q_A_RAT_RLL_I  = 0.200
@@ -23,7 +37,7 @@ Q_A_RAT_RLL_D  = 0.004
 Q_A_RAT_RLL_FF = 0.180
 ```
 
-### Tuning Journey
+### Tuning Journey (pre-KV-fix history — the "physical authority limit" conclusion below no longer applies now that real thrust output is fixed)
 | Round | P | I | D | FF | Result |
 |-------|---|---|---|----|--------|
 | Original | 0.45 | 0.25 | 0.004 | - | ~21 Hz opposing oscillation, hot motors |
@@ -45,6 +59,8 @@ C1 and C4 hover at ~1700–1750 µs mean with a ceiling of 1949 µs. During aggr
 ---
 
 ## Yaw PID — Tuned to Physical Authority Limit (June 21, 2026)
+
+**⚠️ Untested since the AM32 Motor KV discovery (see Hardware Config above).** The rear yaw motors were never confirmed to have the correct Motor KV set in their ESCs — if they shipped with the same 2220 default that was silently capping the front motors, that could be the real explanation for the "physical authority limit" / rail-riding described below, rather than (or in addition to) the geometric cant-angle argument. **Check rear ESC Motor KV before assuming the hardware fix (cant angle change) is still necessary** — this is now the top item in Outstanding Items.
 
 ### Final Values
 ```
@@ -203,11 +219,12 @@ Full invariant: `Avatar_Design.md § 9 [AV-INVAR:vel-damp]`
 
 ## Outstanding Items
 
-1. **Weathervaning investigation** — see next section
-2. **Dump golden params** — `python3 tools/mavlink/param_dump.py -v -o params/avatar_t1ranger_micoair.param`
-3. **Yaw hardware fix** — cant rear motors out 2–5° to recover yaw authority (software maxed)
-4. **Motor heat** — fundamental thrust-to-weight issue with 2-blade props; monitor in extended hover
-5. **Pre-production cleanup** — disable `AVATAR_DEBUG_LOG` flag and remove TILT GCS debug message
+1. **Check rear (yaw) ESC Motor KV setting** — NEW, high priority. The front ESCs were found defaulted to `Motor KV=2220` instead of the real 900, silently capping thrust (see Hardware Config above). The rear ESCs have never been confirmed. If they have the same unset default, it may fully or partially explain the June "yaw physical authority limit" finding — check this *before* pursuing the cant-angle hardware fix below.
+2. **Weathervaning investigation** — see next section
+3. **Yaw hardware fix** — cant rear motors out 2–5° to recover yaw authority (only pursue if #1 doesn't resolve it)
+4. **Motor heat** — fundamental thrust-to-weight issue; re-check now that front motors/props have changed
+5. **Re-verify yaw PID** — tuned against the old front-motor thrust profile; front motor retune (July 5) may have shifted coupling behavior enough to warrant a yaw pass too
+6. **Pre-production cleanup** — disable `AVATAR_DEBUG_LOG` flag and remove TILT GCS debug message
 
 ---
 
