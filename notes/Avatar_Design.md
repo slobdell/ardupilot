@@ -830,7 +830,7 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 
 ### [AV-INVAR:coordinated-turn-ff]
 
-**What:** In all nav plane modes, a kinematic turn-coordination feedforward `g·tan(bank)/V` is summed with the pilot's yaw rate before the target is written: `rate_bf_yaw_target(pilot_yaw_cds + coord_yaw_cds)`. It is a *desired yaw rate* — architecturally no different from the pilot deflecting the rudder stick — so the single copter yaw PID (`[AV-INVAR:stabilize-yaw-pid]`) and the existing mixer actuator split (`[AV-INVAR:yaw-handoff-cos-tilt]`) execute it unchanged. There is **no second (surface) PID** and no per-actuator scaling at the injection point.
+**What:** In all nav plane modes, a kinematic turn-coordination feedforward `g·tan(bank)/V * (1 - cos_tilt)` is summed with the pilot's yaw rate before the target is written: `rate_bf_yaw_target(pilot_yaw_cds + coord_yaw_cds)`. It is a *desired yaw rate* — architecturally no different from the pilot deflecting the rudder stick — so the single copter yaw PID (`[AV-INVAR:stabilize-yaw-pid]`) and the existing mixer actuator split (`[AV-INVAR:yaw-handoff-cos-tilt]`) execute it unchanged. It is scaled by `1 - cos_tilt` to fade it out toward hover (where coordinated turning is physically meaningless and low speeds would cause over-aggressive yaw demands). There is **no second (surface) PID** and no per-actuator scaling at the injection point.
 
 **Where:** `ArduPlane/quadplane.cpp` — Avatar FBWA block, immediately before the yaw `rate_bf_yaw_target()` call, inside the `[AV-INVAR:stabilize-yaw-pid]` block.
 

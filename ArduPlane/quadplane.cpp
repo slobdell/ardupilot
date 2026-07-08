@@ -2193,7 +2193,9 @@ void QuadPlane::update(void)
                     } else {
                         coord_speed = MAX((float)plane.aparm.airspeed_cruise, 1.0f);
                     }
-                    const float coord_yaw_cds = degrees(GRAVITY_MSS * tanf(bank_rad) / coord_speed) * 100.0f;
+                    const float curr_tilt_deg = ((AP_Motors6DOF*)motors)->get_tilt_deg();
+                    const float cos_tilt = fmaxf(0.0f, cosf(radians(curr_tilt_deg)));
+                    const float coord_yaw_cds = degrees(GRAVITY_MSS * tanf(bank_rad) / coord_speed) * 100.0f * (1.0f - cos_tilt);
                     attitude_control->rate_bf_yaw_target(pilot_yaw_cds + coord_yaw_cds);
                 }
 
