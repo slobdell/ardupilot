@@ -18,14 +18,14 @@ The design goal is that this transition happens **automatically and continuously
 ### 2.1 Motors
 - **Motor 1 (Left Wing):** Fixed to the left wing, tilts with the wing. Provides lift and/or forward thrust depending on wing angle.
 - **Motor 2 (Right Wing):** Fixed to the right wing, tilts with the wing. Always commanded identical thrust to Motor 1.
-- **Motor 3 (Rear Right Yaw):** Spring-lever mounted rear motor. Differential thrust with Motor 4 produces lateral (yaw) force via the spring-lever mechanism. Also contributes lift as wings tilt toward vertical.
-- **Motor 4 (Rear Left Yaw):** Spring-lever mounted rear motor, paired with Motor 3 for differential yaw.
+- **Motor 3 (Rear Right Yaw):** Canted rear motor (fixed mount, no moving parts). Differential thrust with Motor 4 produces lateral (yaw) force via the cant angle. Also contributes lift as wings tilt toward vertical.
+- **Motor 4 (Rear Left Yaw):** Canted rear motor, paired with Motor 3 for differential yaw.
 
 ### 2.2 Servos
 - **Single Tilt Servo:** Drives both wings simultaneously via a shared mechanical linkage. Controls the pitch axis of the thrust vector only. **Roll axis tilt is mechanically impossible** and is not implemented.
 
 ### 2.3 Yaw
-Two rear motors on spring-loaded levers provide yaw authority at low speeds and in copter mode. Differential thrust causes the higher-thrust motor to swing outward and deliver lateral side force. **This mechanism is implemented on the T1 Ranger test airframe** (Motor 3 = right rear on SERVO3, Motor 4 = left rear on SERVO2).
+Two **canted** rear motors provide yaw authority at low speeds and in copter mode: each motor is fixed at a cant angle, so differential thrust yields a net lateral (yaw) force component. There are no moving parts in the yaw mechanism — yaw response lag is set by ESC/prop spool time, not mechanics. **This is what is implemented on the T1 Ranger test airframe** (Motor 3 = right rear on SERVO3, Motor 4 = left rear on SERVO2). (An earlier spring-lever design — motors swinging outward on spring-loaded levers — was described here previously but is NOT what flies; corrected July 2026.)
 
 **Sign convention:** positive `inputs.yaw` = right yaw. In the mixer: `YAW_LEFT = rear + yaw_delta`, `YAW_RIGHT = rear - yaw_delta`. Note this is opposite to the intuition from torque-based copter yaw — the differential here is thrust, not torque.
 
@@ -1077,6 +1077,22 @@ The elevator mixing suppression is required because `stabilize_stick_mixing_dire
 **Do not "fix" this back to `_ahrs.get_pitch()`** because the fuselage pitch "looks more correct" — a level fuselage is the *designed* state at every tilt angle and carries zero climb-effort information on this aircraft. Do not feed the synthetic value anywhere else in TECS (energy estimates, pitch demand); it is scoped to the throttle mapping only.
 
 **Default-safe:** `_synthetic_pitch_rad` defaults to 0 (= "rotors horizontal" = cruise throttle), which reproduces pre-fix behaviour if the setter is ever not called.
+
+---
+
+### [AV-INVAR:tecs-seed-current-state]
+
+**What:** On a TECS cold reset (`_initialise_states`, the `_DT > 0.2 || _need_reset` branch — i.e. entering any TECS mode from a mode that doesn't run TECS), the pitch loop is seeded from the current earth-frame thrust-vector elevation instead of zero: `pitch_now = _pitch_measured_for_throttle()` (constrained to pitch limits), then `_integSEBdot = pitch_now × _TAS_state × g`, `_last_pitch_dem = pitch_now`, `_pitch_demand_lpf.reset(pitch_now)`. First-frame pitch demand therefore equals the aircraft's existing tilt state. Mode entry means "the autopilot algorithm changed," not "transition to forward flight now."
+
+**Why the seed is exact:** pitch demand is `(SEBdot_dem_total + _integSEBdot + _integKE)/gainInv` with `gainInv = _TAS_state × g`. At entry the altitude target snapshots to current altitude (`set_target_altitude_current()`), so `SEBdot_dem_total ≈ 0` and the integrator term alone sets the opening demand. `[AV-INVAR:pitch-90-identity]` makes "pitch demand = thrust elevation" a literal identity, so seeding from the measured elevation holds the current tilt exactly.
+
+**Why all three together:** the integrator sets the demand; `_last_pitch_dem` otherwise makes the vert-acc rate limiter slew the demand in from fuselage pitch (~0° on Avatar); and the throttle law's blended pitch = HPF(demand) + LPF(measured) — if the demand LPF were left at fuselage pitch while the demand opens at e.g. 90°, the HPF transient would add a spurious +90° and rail throttle far above its correct value. Seeding demand and its LPF to the same value starts the HPF term at exactly zero.
+
+**Behavioural meaning:** entry from established forward flight seeds ≈ 0° — indistinguishable from the old zeroed reset. Entry from hover seeds ≈ 90°: rotors stay vertical, throttle opens near `THR_MAX` (consistent with `[AV-INVAR:tecs-synth-pitch]`), and the height loop walks tilt down only as climb evidence accumulates (`TECS_TIME_CONST` timescale), settling at the wing-borne or mid-tilt (Osprey) equilibrium. Before this seed, any CRUISE entry commanded an immediate tilt-to-horizontal at `Q_TILT_RATE_DN` (30°/s) regardless of flight state.
+
+**Where:** `AP_TECS.cpp` `_initialise_states()`, cold-reset branch only. Deliberately NOT in the TAKEOFF/ABORT_LANDING branch (Avatar flies no auto-takeoff; stock semantics preserved there). Gated `!g_config.tricopter_is_blimp` — the blimp keeps the stock zeroed reset verbatim (same geometry rationale as `[AV-INVAR:tecs-synth-pitch]`; for the blimp `_pitch_measured_for_throttle()` is plain AHRS pitch anyway, so a seed would encode nothing about its tilt).
+
+**Verification status:** compile-verified only (July 2026). Flight/SITL check: enter CRUISE from a hover and confirm `TECS.ph`/nav pitch demand opens near 90° with tilt holding vertical, then decays — instead of tilt slewing straight to horizontal.
 
 ---
 

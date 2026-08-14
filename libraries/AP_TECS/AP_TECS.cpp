@@ -1202,6 +1202,22 @@ void AP_TECS::_initialise_states(float hgt_afe)
         _pitch_demand_lpf.reset(_ahrs.get_pitch());
         _pitch_measured_lpf.reset(_pitch_measured_for_throttle());   // [AV-INVAR:tecs-synth-pitch]
 
+#if ENABLE_TRICOPTER_VTOL_BACKEND
+        if (!g_config.tricopter_is_blimp) {
+            // [AV-INVAR:tecs-seed-current-state] — see notes/Avatar_Design.md § 9
+            // Seed the pitch loop from the current thrust-vector elevation so mode
+            // entry holds the existing tilt/thrust state instead of demanding an
+            // immediate transition to wings-horizontal. All three must be seeded
+            // together: the integrator sets the opening pitch demand, _last_pitch_dem
+            // keeps the vert-acc rate limiter from slewing in from fuselage pitch,
+            // and the demand LPF keeps the throttle law's HPF transient at zero.
+            const float pitch_now = constrain_float(_pitch_measured_for_throttle(), _PITCHminf, _PITCHmaxf);
+            _integSEBdot = pitch_now * _TAS_state * GRAVITY_MSS;
+            _last_pitch_dem = pitch_now;
+            _pitch_demand_lpf.reset(pitch_now);
+        }
+#endif
+
     } else if (_flight_stage == AP_FixedWing::FlightStage::TAKEOFF || _flight_stage == AP_FixedWing::FlightStage::ABORT_LANDING) {
         
         if (!_flag_throttle_forced) {
